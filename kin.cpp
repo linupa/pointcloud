@@ -3,6 +3,34 @@
 
 using namespace std;
 
+Links::Links(const Link &link)
+{
+	const Link *src = &link;
+	Link *child = NULL;
+
+	do {
+		node = new Link(*src);
+		if ( child )
+			child->parent = node;
+		child = node;
+	}
+	while (src = src->parent);
+}
+
+Links::~Links(void)
+{
+	do 
+	{
+		Link *link = node;
+
+		node = node->parent;
+
+		delete link;
+	}
+	while ( node );
+
+}
+
 Link::Link(void)
 {
 	rot = MatrixXd::Zero(3,3);

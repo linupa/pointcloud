@@ -41,7 +41,8 @@ extern double trackPos[3];
 extern int slice_idx;
 extern double gTorque[3];
 double phi;
-double q[11] = {0.};
+VectorXd q;
+VectorXd q0;
 vector<VectorXd> qp1;
 vector<VectorXd> qp2;
 int		control = 1.;
@@ -49,6 +50,7 @@ double speed = 0.;
 
 extern bool bSimul;
 extern bool bPlan;
+extern bool bPlanning;
 extern bool bSend;
 extern XmlNode baseNode;
 extern void periodicTask(void);
@@ -61,7 +63,9 @@ int seq_ui = 0;
 extern vector<Link> myLink;
 extern RRT<9> *rrt;
 double *value;
-double getPotential(int mode, const VectorXd &contact, const VectorXd &q);
+double getPotential(int mode, const VectorXd &contact, const VectorXd &q, const VectorXd &q0);
+VectorXd getQ(const VectorXd &uq);
+VectorXd getQa(const VectorXd &q);
 
 //MySim::MySim(int xx, int yy, int width, int height) : Fl_Widget(xx, yy, width, height, "")
 MySim::MySim(int xx, int yy, int width, int height) : Fl_Gl_Window(xx, yy, width, height, "")
@@ -351,7 +355,7 @@ extern double	min_pos[2], max_pos[2];
 		glLineWidth(1.0);
 		glTranslatef(pNode->pos(0), pNode->pos(1), pNode->pos(2));
 		glRotatef(pNode->rot(3)*180./M_PI, pNode->rot(0), pNode->rot(1), pNode->rot(2));
-		glRotatef(q[index+1]*180./M_PI, 0., 0., 1.);
+		glRotatef(q[index]*180./M_PI, 0., 0., 1.);
 		drawBlock(0.025, 0.05);
 #if 0
 		glPushMatrix();
@@ -359,7 +363,7 @@ extern double	min_pos[2], max_pos[2];
 		glutSolidSphere(0.025,20,20);
 		glPopMatrix();
 #endif
-		myLink[index].theta = q[index+1];
+		myLink[index].theta = q[index];
 		index ++;
 
 //		Link link1;
@@ -386,13 +390,18 @@ extern double	min_pos[2], max_pos[2];
 
 	if ( qp->size() > 0 )
 	{
-		seq	= (tickCount/2 ) % (2*qp->size()-1);
-		if ( seq >= qp->size() )
-			seq = 2*qp->size() - 1 - seq;
+		seq	= (tickCount/2 ) % (3*qp->size()-1);
+		if ( seq >= 2 * qp->size() )
+			seq = 3*qp->size() - 1 - seq;
+		else if ( seq >= qp->size() )
+			seq = qp->size()-1;
+
 		assert( seq < qp->size());
 	}
 	if ( seq_ui > 0 )
+	{
 		seq = seq_ui-1;
+	}
 
 //	for ( ; it != qp->end() ; it++ )
 	if ( qp->size() )
@@ -402,7 +411,7 @@ extern double	min_pos[2], max_pos[2];
 		pNode = baseNode.childs;
 		glPushMatrix();
 		do {
-			VectorXd q = (*qp)[seq];
+			VectorXd Q = (*qp)[seq];
 
 			glLineWidth(3.0);
 			glBegin(GL_LINES);
@@ -418,11 +427,11 @@ extern double	min_pos[2], max_pos[2];
 			glLineWidth(1.0);
 			glTranslatef(pNode->pos(0), pNode->pos(1), pNode->pos(2));
 			glRotatef(pNode->rot(3)*180./M_PI, pNode->rot(0), pNode->rot(1), pNode->rot(2));
-			glRotatef(q(index+1)*180./M_PI, 0., 0., 1.);
+			glRotatef(Q(index)*180./M_PI, 0., 0., 1.);
 			drawBlock(0.025, 0.05);
 			glPushMatrix();
 			glTranslatef(pNode->com(0), pNode->com(1), pNode->com(2));
-			myLink[index].theta = q(index+1);
+			myLink[index].theta = Q(index);
 	//		glutSolidSphere(0.025,20,20);
 			glPopMatrix();
 			index ++;
@@ -456,6 +465,18 @@ extern double	min_pos[2], max_pos[2];
 	glColor3f(1.,0.,0.);
 	glTranslatef(0.3, -0.1, 0.2);
 	glutSolidSphere(0.025,20,20);
+	glPopMatrix();
+	
+	VectorXd r;
+	for ( j = 0 ; j < 10 ; j++ )
+	{
+		myLink[j].theta = q0[j];
+	}
+	r = myLink[5].getGlobal(VectorXd::Zero(3));
+	glPushMatrix();
+	glColor3f(0.0, 1.0, 0.0);
+	glTranslatef(r(0), r(1), r(2));
+	glutSolidSphere(0.040,20,20);
 	glPopMatrix();
 
 
@@ -671,7 +692,7 @@ timer_cb(void * param)
 */
 	if ( !bSimul )
 		q[control] += speed;
-	q[3] = q[2];
+	q[2] = q[1];
 
 	periodicTask();
 
@@ -713,7 +734,7 @@ void MyWindow::
 cb_reset(Fl_Widget *widget, void *param)
 {
 	bSimul = false;
-	for ( int i = 0 ; i < 11 ; i++ )
+	for ( int i = 0 ; i < 10 ; i++ )
 		 q[i] = 0.;
 }
 
@@ -749,37 +770,48 @@ cb_push(Fl_Widget *widget, void *param)
 {
 	int i, j ;
 
-	if ( bPlan )
+	if ( bPlanning )
 		return;
 
 	if ( !rrt || rrt->numNodes == 0 )
 		return;
 
-	for ( j = 0 ; j < 9 ; j++ )
+	for ( j = 0 ; j < 10 ; j++ )
 	{
-		myLink[j].theta = q[j+1];
+		myLink[j].theta = q[j];
 	}
 	VectorXd contact = myLink[5].getGlobal(VectorXd::Zero(3));
 
-	cerr << "Start Pushing... " << contact.transpose() << endl;
+	cerr << "Start Pushing... " << contact.transpose() << " : " << push_type << endl;
 
-	double	max = 0.;
+	double	max = -100000.;
 	int		max_idx = 0;
 
+	cerr << "getPotential" << endl;
+	cerr << contact.transpose() << endl;
+	cerr << q0.transpose() << endl;
 	value = (double *)malloc(sizeof(double)*rrt->numNodes);
-	for ( i = 0 ; i < rrt->numNodes ; i++ )
+	pthread_mutex_lock(&mutex);
+	for ( i = rrt->numNodes-1 ; i >= 0 ; i-- )
+//	for ( i = 0 ; i < rrt->numNodes ; i++ )
 	{
 		Node<9> *pNode = rrt->nodes[i];
+		VectorXd Q = getQ(pNode->q);
 
-		double sum = getPotential(push_type, contact, pNode->q);
+		double sum = getPotential(push_type, contact, Q, q0);
 		value[i] = sum;
 		
 		if ( sum > max )
 		{
 			max		= sum;
 			max_idx	= i;
+			cerr << "MAX " << max_idx << ": " << max <<endl;
+			cerr << Q.transpose() << endl;
+			cerr << q0.transpose() << endl;
 		}
 	}
+	pthread_mutex_unlock(&mutex);
+	cerr << "MAX " << max_idx << ": " << max << " " << i << endl;
 
 	bRandom = true;;
 	goalIdx = max_idx;
@@ -809,6 +841,20 @@ cb_seq(Fl_Widget *widget, void *param)
 {
 	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
 	seq_ui = (int)pSlider->value();
+	int seq = seq_ui - 1;
+
+	if ( seq > 0 )
+	{
+		VectorXd contact	= myLink[5].getGlobal(VectorXd::Zero(3));
+
+		pthread_mutex_lock(&mutex);
+		VectorXd Q = qp1[seq]; 
+		pthread_mutex_unlock(&mutex);
+
+		double val = getPotential(0, contact, Q, q0);
+
+		cerr << seq << ": " << val << ":" << Q.transpose() * 180. / M_PI << endl;
+	}
 }
 
 MyWindow::~MyWindow(void)

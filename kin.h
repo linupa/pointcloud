@@ -5,6 +5,16 @@
 
 using namespace Eigen;
 
+class Link;
+
+class Links
+{
+public:
+	Link *node;
+	Links(const Link &link);
+	~Links(void);
+};
+
 class Link
 {
 public:
