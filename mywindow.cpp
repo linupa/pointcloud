@@ -66,6 +66,8 @@ double *value;
 double getPotential(int mode, const VectorXd &contact, const VectorXd &q, const VectorXd &q0);
 VectorXd getQ(const VectorXd &uq);
 VectorXd getQa(const VectorXd &q);
+extern VectorXd elbow0;
+extern VectorXd elbow;
 
 //MySim::MySim(int xx, int yy, int width, int height) : Fl_Widget(xx, yy, width, height, "")
 MySim::MySim(int xx, int yy, int width, int height) : Fl_Gl_Window(xx, yy, width, height, "")
@@ -467,18 +469,24 @@ extern double	min_pos[2], max_pos[2];
 	glutSolidSphere(0.025,20,20);
 	glPopMatrix();
 	
-	VectorXd r;
-	for ( j = 0 ; j < 10 ; j++ )
-	{
-		myLink[j].theta = q0[j];
-	}
-	r = myLink[5].getGlobal(VectorXd::Zero(3));
 	glPushMatrix();
 	glColor3f(0.0, 1.0, 0.0);
-	glTranslatef(r(0), r(1), r(2));
+	glTranslatef(elbow0(0), elbow0(1), elbow0(2));
+	glutSolidSphere(0.020,20,20);
+	glPopMatrix();
+
+	glPushMatrix();
+	glColor3f(0.0, 0.0, 1.0);
+	glTranslatef(elbow(0), elbow(1), elbow(2));
 	glutSolidSphere(0.040,20,20);
 	glPopMatrix();
 
+	glColor3f(1.0, 1.0, 1.0);
+	glLineWidth(3.0);
+	glBegin(GL_LINES);
+	glVertex3f(elbow0(0), elbow0(1), elbow0(2));
+	glVertex3f(elbow(0), elbow(1), elbow(2));
+	glEnd();
 
 
 //	fprintf(stderr, "%f %f %f %f %f %f\n", torque[0], torque[1], torque[2], force[0], force[1], force[2]); 
@@ -666,6 +674,13 @@ timer_cb(void * param)
 //		paused = true;
 	
 //	if ( !paused )
+
+	if ( !bSimul )
+		q[control] += speed;
+	q[2] = q[1];
+
+	periodicTask();
+
 	static int count = 0;
 
 	if ( (count % 30) == 0 )
@@ -690,11 +705,6 @@ timer_cb(void * param)
 	if ( ! paused )
 		paused_ready = false;
 */
-	if ( !bSimul )
-		q[control] += speed;
-	q[2] = q[1];
-
-	periodicTask();
 
 	reinterpret_cast<MyWindow*>(param)->mPhiSlider->bounds(0., (double)(qp1.size()));
 

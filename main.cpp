@@ -32,6 +32,8 @@
 #include "Comm.h"
 #include "kin.h"
 
+#define CHECK_LIMIT
+
 using namespace std;
 using namespace boost;
 using namespace jspace;
@@ -64,6 +66,10 @@ extern int seq;
 vector<Link> myLink(10);
 RRT<9> *rrt;
 extern double *value;
+
+Vector elbow0;
+Vector elbow;
+Vector error;
 
 template<int T>
 MatrixXd getProjection(Node<T> &p);
@@ -329,6 +335,22 @@ void periodicTask(void)
 			desired_pos = node.actual;
 		}
 #endif
+
+		int j;
+
+		for ( j = 0 ; j < 10 ; j++ )
+		{
+			myLink[j].theta = q0[j];
+		}
+		elbow0 = myLink[5].getGlobal(VectorXd::Zero(3));
+
+		for ( j = 0 ; j < 10 ; j++ )
+		{
+			myLink[j].theta = q[j];
+		}
+		elbow = myLink[5].getGlobal(VectorXd::Zero(3));
+
+		error = elbow - elbow0;
 	}
 	else
 	{
@@ -535,7 +557,10 @@ void *plan(void *)
 
 	while (1)
 	{
+		int next_count = 1000;
+
 		rrt = new RRT<9>(Mins, Maxs, STEP);
+//		rrt = new RRT<9>(-M_PI, M_PI, STEP);
 #if 0
 		Node<9> *newNode = new Node<9>;
 
@@ -567,8 +592,7 @@ void *plan(void *)
 
 	//		usleep(1000);
 			{
-
-				if ( (count%1000) == 0 )
+				if ( rrt->numNodes > next_count )
 				{
 					fprintf(stderr, "%d nodes added\n", rrt->numNodes);	
 					Node<9> *p = rrt->nodes[rrt->numNodes-1];
@@ -582,6 +606,7 @@ void *plan(void *)
 					qp1.clear();
 					qp1.push_back(getQ(p->q));
 					pthread_mutex_unlock(&mutex);
+					next_count += 1000;
 				}
 				count++;
 
@@ -785,6 +810,7 @@ double project( const Node<T> &p, Node<T> &np )
 	np.q	= p.q + dq;
 
 	VectorXd qdeg = np.q * 180. / M_PI;
+#ifdef CHECK_LIMIT
 	for ( int i = 0 ; i < T ; i++ )
 	{
 #if 0
@@ -803,6 +829,7 @@ double project( const Node<T> &p, Node<T> &np )
 
 #endif
 	}
+#endif
 //	cerr << "New Node" << np.q.transpose()*180./M_PI << endl;
 
 	np.projection	= getProjection(np);
