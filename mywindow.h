@@ -68,8 +68,8 @@ public:
 	Fl_Value_Slider *mSizeSlider;
 	Fl_Value_Slider *mSliceSlider;
 	Fl_Value_Slider *mScaleSlider;
-	Fl_Value_Slider *mFloorSlider;
-	Fl_Value_Slider *mPhiSlider;
+	Fl_Value_Slider *mNodeSlider;
+	Fl_Value_Slider *mSeqSlider;
 	Fl_Value_Slider *mHighlightSlider;
 	~MyWindow(void);
 
@@ -104,7 +104,9 @@ public:
 	static void cb_pushy(Fl_Widget *widget, void *param);
 	static void cb_pushz(Fl_Widget *widget, void *param);
 	static void cb_push(Fl_Widget *widget, void *param);
+
 	static void cb_seq(Fl_Widget *widget, void *param);
+	static void cb_node(Fl_Widget *widget, void *param);
 	static void timer_cb(void *param);
 };
 

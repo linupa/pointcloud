@@ -13,6 +13,7 @@
 #include "xml.h"
 #include "kin.h"
 #include "rrt.hpp"
+#include "prm.hpp"
 
 #define CLICK_THRESHOLD 3
 
@@ -55,13 +56,16 @@ extern bool bSend;
 extern XmlNode baseNode;
 extern void periodicTask(void);
 extern pthread_mutex_t	mutex;
+extern bool pushing;
 
 int tickCount = 0;
 int seq; 
 int seq_ui = 0;
+int node_id = 0;
 
 extern vector<Link> myLink;
 extern RRT<9> *rrt;
+extern PRM<9> *prm;
 double *value;
 double getPotential(int mode, const VectorXd &contact, const VectorXd &q, const VectorXd &q0);
 VectorXd getQ(const VectorXd &uq);
@@ -392,7 +396,14 @@ extern double	min_pos[2], max_pos[2];
 
 	if ( qp->size() > 0 )
 	{
-		seq	= (tickCount/2 ) % (3*qp->size()-1);
+//		seq	= (tickCount/2 ) % (3*qp->size()-1);
+		if ( tickCount/2  > (3*qp->size()-1) )
+		{
+			seq = 0;
+			pushing = false;
+		}
+		else 
+			seq	= (tickCount/2 ) % (3*qp->size()-1);
 		if ( seq >= 2 * qp->size() )
 			seq = 3*qp->size() - 1 - seq;
 		else if ( seq >= qp->size() )
@@ -400,20 +411,27 @@ extern double	min_pos[2], max_pos[2];
 
 		assert( seq < qp->size());
 	}
+	else
+		pushing = false;
 	if ( seq_ui > 0 )
 	{
 		seq = seq_ui-1;
 	}
 
-//	for ( ; it != qp->end() ; it++ )
+	VectorXd Q = q;
+
 	if ( qp->size() )
+		Q = (*qp)[seq];
+	if ( prm->numNodes > 0 && node_id > 0 )
+		Q = getQ(prm->nodes[node_id-1]->q);
+
+//	for ( ; it != qp->end() ; it++ )
 	{
 //		cerr << seq << " / " << qp->size() << endl;
 		index = 0;
 		pNode = baseNode.childs;
 		glPushMatrix();
 		do {
-			VectorXd Q = (*qp)[seq];
 
 			glLineWidth(3.0);
 			glBegin(GL_LINES);
@@ -604,19 +622,19 @@ MyWindow(int width, int height, const char * title)
 	mScaleSlider->callback(cb_speed, this);
 	mScaleSlider->value(0);
 
-	mFloorSlider = new Fl_Value_Slider( width / 4 + 20, height - 30, width / 4 - 100, 30, "");
-	mFloorSlider->type(FL_HORIZONTAL);
-	mFloorSlider->bounds(-3., 0.);
-	mFloorSlider->step(0.1);
-	mFloorSlider->callback(cb_quit, this);
-	mFloorSlider->value(0);//_floor);
+	mNodeSlider = new Fl_Value_Slider( width / 4 + 20, height - 30, width / 4 - 100, 30, "");
+	mNodeSlider->type(FL_HORIZONTAL);
+	mNodeSlider->bounds(-3., 0.);
+	mNodeSlider->step(1.0);
+	mNodeSlider->callback(cb_node, this);
+	mNodeSlider->value(0);
 
-	mPhiSlider = new Fl_Value_Slider( width / 4 + 20, height - 30, width / 4 - 100, 30, "");
-	mPhiSlider->type(FL_HORIZONTAL);
-	mPhiSlider->bounds(0., 0.);
-	mPhiSlider->step(1.);
-	mPhiSlider->callback(cb_seq, this);
-	mPhiSlider->value(0);
+	mSeqSlider = new Fl_Value_Slider( width / 4 + 20, height - 30, width / 4 - 100, 30, "");
+	mSeqSlider->type(FL_HORIZONTAL);
+	mSeqSlider->bounds(0., 0.);
+	mSeqSlider->step(1.);
+	mSeqSlider->callback(cb_seq, this);
+	mSeqSlider->value(0);
 
 	mHighlightSlider = new Fl_Value_Slider( 10, height - 35, width / 4 - 100, 30, "");
 	mHighlightSlider->type(FL_VERTICAL);
@@ -641,8 +659,8 @@ resize(int x, int y, int w, int h)
 	sim->resize(0, 0, w-70, h-110);
 	mSliceSlider->resize(	10, 				h-35,	(w-305)/2 - 5,25);
 	mScaleSlider->resize(	10 + (w-305)/2 - 5,	h-35,	(w-305)/2 - 5,25);
-	mPhiSlider->resize(		10, 				h-70,	(w-305)/2 - 5,25);
-	mFloorSlider->resize(	10 + (w-305)/2 - 5,	h-70,	(w-305)/2 - 5,25);
+	mSeqSlider->resize(		10, 				h-70,	(w-305)/2 - 5,25);
+	mNodeSlider->resize(	10 + (w-305)/2 - 5,	h-70,	(w-305)/2 - 5,25);
 	mGroupSlider->resize(	10, 				h-105,	(w-305)/2 - 5,25);
 	mSizeSlider->resize(	10 + (w-305)/2 - 5,	h-105,	(w-305)/2 - 5,25);
 
@@ -706,7 +724,8 @@ timer_cb(void * param)
 		paused_ready = false;
 */
 
-	reinterpret_cast<MyWindow*>(param)->mPhiSlider->bounds(0., (double)(qp1.size()));
+	reinterpret_cast<MyWindow*>(param)->mSeqSlider->bounds(0., (double)(qp1.size()));
+	reinterpret_cast<MyWindow*>(param)->mNodeSlider->bounds(0., (double)(prm->numNodes));
 
 	Fl::repeat_timeout(dt, // gets initialized within tickCount()
 			   timer_cb,
@@ -771,7 +790,7 @@ void MyWindow::
 cb_send(Fl_Widget *widget, void *param)
 {
 	bSend = !bSend;
-	tickCount = 0;
+//	tickCount = 0;
 }
 
 int push_type = 0;
@@ -815,9 +834,9 @@ cb_push(Fl_Widget *widget, void *param)
 		{
 			max		= sum;
 			max_idx	= i;
-			cerr << "MAX " << max_idx << ": " << max <<endl;
-			cerr << Q.transpose() << endl;
-			cerr << q0.transpose() << endl;
+//			cerr << "MAX " << max_idx << ": " << max <<endl;
+//			cerr << Q.transpose() << endl;
+//			cerr << q0.transpose() << endl;
 		}
 	}
 	pthread_mutex_unlock(&mutex);
@@ -825,6 +844,7 @@ cb_push(Fl_Widget *widget, void *param)
 
 	bRandom = true;;
 	goalIdx = max_idx;
+	tickCount = 0;
 }
 
 void MyWindow::
@@ -865,6 +885,15 @@ cb_seq(Fl_Widget *widget, void *param)
 
 		cerr << seq << ": " << val << ":" << Q.transpose() * 180. / M_PI << endl;
 	}
+}
+
+void MyWindow::
+cb_node(Fl_Widget *widget, void *param)
+{
+	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
+	node_id = (int)pSlider->value();
+	if ( node_id > 0 )
+		cerr <<  prm->nodes[node_id-1]->q.transpose()*180./M_PI << endl;
 }
 
 MyWindow::~MyWindow(void)

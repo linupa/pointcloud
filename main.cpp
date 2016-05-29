@@ -13,6 +13,7 @@
 #include <boost/scoped_ptr.hpp>
 
 #include "rrt.hpp"
+#include "prm.hpp"
 #include "xml.h"
 
 #include <GL/gl.h>
@@ -31,6 +32,7 @@
 #include "mywindow.h"
 #include "Comm.h"
 #include "kin.h"
+#include "timestamp.h"
 
 #define CHECK_LIMIT
 
@@ -65,6 +67,7 @@ extern int tickCount;
 extern int seq; 
 vector<Link> myLink(10);
 RRT<9> *rrt;
+PRM<9> *prm;
 extern double *value;
 
 Vector elbow0;
@@ -133,6 +136,7 @@ int get_elapsed(void)
 	return (sec*1000000 + usec); 
 }
 
+void periodicTask(void);
 int main(int argc, char *argv[])
 {
 	int c;
@@ -221,6 +225,8 @@ int main(int argc, char *argv[])
 
 	MyWindow win(win_width, win_height, "test");
 
+	periodicTask();
+
 	int ret = Fl::run();
 }
 
@@ -239,8 +245,11 @@ MatrixXd getJacobian(const Model &model)
 
 	return J;
 }
+bool pushing = false;
 
+extern int push_type;
 int qmap[] = {0,1,3,4,5,6,7,8,9};
+Timestamp ts1("Period");
 void periodicTask(void)
 {
 	Vector tau1, tau2, tau;
@@ -351,17 +360,52 @@ void periodicTask(void)
 		elbow = myLink[5].getGlobal(VectorXd::Zero(3));
 
 		error = elbow - elbow0;
+
+		if ( error(0) > 0.03 && bPlanning == false && pushing == false)
+		{
+			cerr << "====================================" << endl;
+			cerr << " Push Forward " << endl;
+			cerr << "====================================" << endl;
+			push_type = 1;
+			MyWindow::cb_push(NULL, NULL);
+			pushing = true;
+		}
+#if 0
+		if ( error(1) < -0.03 && bPlanning == false && pushing == false)
+		{
+			cerr << "====================================" << endl;
+			cerr << " Push Right " << endl;
+			cerr << elbow.transpose() << " " << elbow0.transpose() << endl;
+			cerr << "====================================" << endl;
+			push_type = 1;
+			MyWindow::cb_push(NULL, NULL);
+			pushing = true;
+		}
+#endif
+		if ( error(2) > 0.03 && bPlanning == false && pushing == false)
+		{
+			cerr << "====================================" << endl;
+			cerr << " Push Up " << endl;
+			cerr << elbow.transpose() << " " << elbow0.transpose() << endl;
+			cerr << "====================================" << endl;
+			push_type = 2;
+			MyWindow::cb_push(NULL, NULL);
+			pushing = true;
+		}
+//		cerr << "PUSH " << bPlanning << " " << pushing << endl;
 	}
 	else
 	{
 
 		mark_start_time();
+		ts1.setBaseline();
 
 		model->update(body_state);
 
 		get_elapsed();
 		ts[0][0] += get_elapsed();
 		ts[0][1] ++;
+		ts1.checkElapsed(0);
 
 		fullJpos_ = model->getFullState().position_;
 		fullJvel_ = model->getFullState().velocity_;
@@ -380,6 +424,7 @@ void periodicTask(void)
 		get_elapsed();
 		ts[1][0] += get_elapsed();
 		ts[1][1] ++;
+		ts1.checkElapsed(1);
 
 #if 1
 		taoDNode const *end_effector_node_ = model->getNode(9);
@@ -391,6 +436,7 @@ void periodicTask(void)
 		get_elapsed();
 		ts[2][0] += get_elapsed();
 		ts[2][1] ++;
+		ts1.checkElapsed(2);
 
 		model->computeJacobian(end_effector_node_, actual_[0], actual_[1], actual_[2], Jfull);
 		J = Jfull.block(0, 0, 3, Jfull.cols());
@@ -401,6 +447,7 @@ void periodicTask(void)
 		get_elapsed();
 		ts[3][0] += get_elapsed();
 		ts[3][1] ++;
+		ts1.checkElapsed(3);
 
 		double kp = 100., kd = 10.0;
 
@@ -419,6 +466,7 @@ void periodicTask(void)
 		get_elapsed();
 		ts[4][0] += get_elapsed();
 		ts[4][1] ++;
+		ts1.checkElapsed(4);
 
 		desired_pos(0) = 0.3;
 		desired_pos(1) = -0.1;
@@ -476,6 +524,7 @@ void periodicTask(void)
 		get_elapsed();
 		ts[5][0] += get_elapsed();
 		ts[5][1] ++;
+		ts1.checkElapsed(5);
 	}
 
 	{
@@ -492,6 +541,7 @@ void periodicTask(void)
 						(double)ts[3][0] / ts[3][1],
 						(double)ts[4][0] / ts[4][1],
 						(double)ts[5][0] / ts[5][1]);
+				cout << ts1;
 				cout << "stat " << body_state.position_.transpose() << endl;
 				cout << "q " << q[1] << " " << q[2] << endl;
 				cout << "actual_ " << endl << actual_.transpose() << endl;
@@ -533,20 +583,25 @@ void periodicTask(void)
 }
 
 #define STEP (M_PI*0.020) // Resolution 0.02PI = 3.6 deg
-double mins[] = {	-80.,	-10,	-70,	 -10,	-60,	  0,	-20,	-40,	-40};
-double maxs[] = {	 80.,	 40,	180,	130,	 60,	100,	200,	 40,	 40};
+//double mins[] = {	-80.,	-10,	-70,	 -10,	-60,	  0,	-20,	-40,	-40};
+//double maxs[] = {	 80.,	 40,	180,	130,	 60,	100,	200,	 40,	 40};
+Vector Mins;
+Vector Maxs;
 // Nominal Joint Limits
-//double mins[] = {	-90.,	-12,	-80,	-25,	-85,	  0,	-48,	-60,	-60};
-//double maxs[] = {	 90.,	 53,	200,	150,	 85,	133,	230,	 60,	 60};
+double mins[] = {	-90.,	-12,	-80,	-25,	-85,	  0,	-48,	-60,	-60};
+double maxs[] = {	 90.,	 43,	200,	150,	 85,	133,	230,	 60,	 60};
 // Actual Joint Limits
 //double mins[] = {	-90.,	-22,	-80,	-23,	-85,	  0,	-48,	-60,	-60};
 //double maxs[] = {	 90.,	 49,	200,	150,	 85,	133,	230,	 60,	 60};
 template <int T>
-double project( const Node<T> &p, Node<T> &np );
+double project2( const Node<T> &p, Node<T> &np );
+
+template <int T>
+double project1( Node<T> &np );
+
 void *plan(void *)
 {
 	fprintf(stderr, "Planning Thread Started...\n");
-	VectorXd Mins, Maxs;
 	int i;
 	Mins = Maxs = VectorXd::Zero(9);
 	for ( i = 0 ; i < 9 ; i++ )
@@ -554,12 +609,16 @@ void *plan(void *)
 		Mins(i) = mins[i] * M_PI / 180.;
 		Maxs(i) = maxs[i] * M_PI / 180.;
 	}
+	cerr << "PRM init" << endl;
+	prm = new PRM<9>(Mins, Maxs, STEP);
+	cerr << "PRM init done" << endl;
 
 	while (1)
 	{
 		int next_count = 1000;
 
 		rrt = new RRT<9>(Mins, Maxs, STEP);
+		prm->init();
 //		rrt = new RRT<9>(-M_PI, M_PI, STEP);
 #if 0
 		Node<9> *newNode = new Node<9>;
@@ -588,7 +647,8 @@ void *plan(void *)
 		{
 			bPlanning = true;
 
-			rrt->iterate( project );
+			rrt->iterate( project2 );
+//			prm->addNode(project1);
 
 	//		usleep(1000);
 			{
@@ -613,6 +673,7 @@ void *plan(void *)
 			}
 		}
 		bPlanning = false;
+		pushing = false;
 
 		cerr << "Total " << rrt->numNodes << " added" << endl;
 
@@ -639,7 +700,7 @@ void *plan(void *)
 					fprintf(stderr, "NODE %d->%d/%d\n", from, to, rrt->numNodes);
 					path = Path<9>(rrt->nodes[from], rrt->nodes[to]);
 					path.step = 0.01*M_PI;
-					path.optimize(project, 100);
+					path.optimize(project2, 100);
 		//			path.optimize(NULL, 10);
 				}
 				Node<9> *p = rrt->nodes[rrt->numNodes-1];
@@ -780,7 +841,138 @@ MatrixXd getProjection(Node<T> &p)
 }
 
 template <int T>
-double project( const Node<T> &p, Node<T> &np )
+double project1( Node<T> &np )
+{
+	Vector dq0;
+	Vector dq;
+	Vector dst = np.q;
+
+	assert(np.q.rows() == T);
+
+	int trial;
+	double err = 1.e10;
+
+	bool violate = true;
+	for ( trial = 100 ; trial >= 0 ; trial-- )
+	{
+		np.projection	= getProjection(np);
+
+
+//	cerr << "New Node" << np.q.transpose()*180./M_PI << endl;
+
+
+		Vector diff1 = desired_pos - np.actual;
+		err = diff1.norm();
+
+//	cerr << p.q.transpose() << endl;
+//	cerr << err << endl;
+#if 1
+		if ( err <= 0.01 && !violate )
+			break;
+
+		cerr << err << "->";
+
+		Vector modified;
+//		cerr << "From  : " << p.q.transpose()<<endl;
+//		cerr << "Before: " << np.q.transpose()<<endl;
+//		modified = np.q + np.traction * diff1 + np.projection * diff2;
+		modified = np.q + np.traction * diff1;
+		np.q = modified;
+
+		Vector diff2 = prm->center - np.q;
+		for ( int i = 0 ; i < T ; i++ )
+		{
+			if ( diff2[i] > M_PI )
+				diff2[i] -= 2.*M_PI;
+			if ( diff2[i] < -M_PI )
+				diff2[i] += 2.*M_PI;
+		}
+		np.q = prm->center - diff2;
+		np.projection	= getProjection(np);
+		MatrixXd weight = prm->weight;
+		violate = false;
+		for ( int i = 0 ; i < T ; i++ )
+		{
+			if ( (np.q(i) < Mins[i]) || (np.q(i) > Maxs[i]) )
+			{
+				violate = true;
+				break;
+			}
+			else
+			{
+				weight(i,i) = 0.;
+			}
+		}
+		modified = np.q + np.projection * weight * diff2;
+		np.q = modified;
+//		cerr << "After : " << np.q.transpose()<<endl;
+//		getProjection(np);
+#endif
+	}
+	if ( err > 0.01 || violate )
+	{
+		cerr << "Failed" << endl;
+		return -1.;
+	}
+
+	cerr << "Found" << endl;
+
+#if 0
+	Vector diff = np.q - prm->center;
+	for ( int i = 0 ; i < T ; i++ )
+	{
+		if ( diff[i] > M_PI )
+			diff[i] -= 2.*M_PI;
+		if ( diff[i] < -M_PI )
+			diff[i] += 2.*M_PI;
+	}
+	np.q = prm->center + diff;
+
+	violate = true;
+	MatrixXd weight = prm->weight;
+	for ( trial = 100 ; trial >= 0 && violate == true; trial-- )
+	{
+		Vector modified;
+		Vector diff2;
+
+
+		getProjection(np);
+		diff2 = prm->center - np.q;
+
+		modified = np.q + np.projection * weight * diff2;
+		np.q = modified;
+
+		violate = false;
+		Vector q = np.q;
+		weight = prm->weight;
+		for ( int i = 0 ; i < T ; i++ )
+		{
+			if ( (q(i) < Mins[i]) || (q(i) > Maxs[i]) )
+			{
+				violate = true;
+				break;
+			}
+			else
+			{
+				weight(i,i) = 0.;
+			}
+		}
+	}
+#if 1
+	if ( violate )
+	{
+		cerr << "Mins  : " << Mins.transpose()*180./M_PI << endl;
+		cerr << "EXCEED: " << np.q.transpose()*180./M_PI << endl;
+		cerr << "Maxs  : " << Maxs.transpose()*180./M_PI << endl;
+		err = -1.;
+	}
+#endif
+#endif
+
+	return err;
+}
+template <int T>
+double project2( const Node<T> &p, Node<T> &np )
 {
 	Vector dq0;
 	Vector dq;
@@ -865,6 +1057,14 @@ double project( const Node<T> &p, Node<T> &np )
 	return mag;
 }
 
+double sgn(double in)
+{
+	if ( in > 0. )
+		return 1.;
+	else if ( in < 0. )
+		return -1.;
+	return 0.;
+}
 double getPotential(int mode, const VectorXd &contact, const VectorXd &q, const VectorXd& q0)
 {
 	int j;
@@ -872,8 +1072,8 @@ double getPotential(int mode, const VectorXd &contact, const VectorXd &q, const 
 	double weight[10] = {0.};
 	int mask[10] = {0};
 
-	weight[5] = 10.;
-	weight[6] = 10.;
+	weight[5] = 25.;
+	weight[6] = 25.;
 	mask[5] = 1;
 	mask[6] = 1;
 
@@ -896,17 +1096,17 @@ double getPotential(int mode, const VectorXd &contact, const VectorXd &q, const 
 		switch (mode)
 		{
 		case 0:
-			sum += weight[j] * mask[j] * d(0) * myLink[j].mass; // X-
+			sum += weight[j] * mask[j] * d(0) * d(0) * sgn(d(0)) * myLink[j].mass; // X-
 			break;
 		case 1:
-			sum -= weight[j] * mask[j] * d(1) * myLink[j].mass; // Y-
+			sum -= weight[j] * mask[j] * d(1) * d(1) * sgn(d(1)) * myLink[j].mass; // Y-
 			break;
 		case 2:
-			sum += weight[j] * mask[j] * d(2) * myLink[j].mass; // Z+
+			sum += weight[j] * mask[j] * d(2) * d(2) * sgn(d(2)) * myLink[j].mass; // Z+
 			break;
 		}
 #endif
-//		sum -= (1-mask[j]) * (q[j] - q0[j]) * (q[j] - q0[j]);
+		sum -= (1-mask[j]) * (q[j] - q0[j]) * (q[j] - q0[j]) * myLink[j].mass;
 	}
 
 	return sum;
