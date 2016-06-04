@@ -1,7 +1,13 @@
 #include <stdio.h>
 #include <math.h>
+#include <iostream>
 
-#include <Eigen/Dense>
+#include <jspace/Model.hpp>
+#include <jspace/State.hpp>
+#include <jspace/test/sai_util.hpp>
+#include <jspace/pseudo_inverse.hpp>
+
+#include <boost/scoped_ptr.hpp>
 
 #include <FL/Fl.H>
 #include <FL/Fl_Double_Window.H>
@@ -12,12 +18,13 @@
 #include "mywindow.h"
 #include "xml.h"
 #include "kin.h"
-#include "rrt.hpp"
 #include "prm.hpp"
 
+using Eigen::MatrixXd;
+
+#include "wbcrrt.h"
 #define CLICK_THRESHOLD 3
 
-using Eigen::MatrixXd;
 
 double target_pos[2];
 int point_pressed = -1;
@@ -44,6 +51,8 @@ extern double gTorque[3];
 double phi;
 VectorXd q;
 VectorXd q0;
+vector<VectorXd> r0;
+
 vector<VectorXd> qp1;
 vector<VectorXd> qp2;
 int		control = 1.;
@@ -56,6 +65,7 @@ extern bool bSend;
 extern XmlNode baseNode;
 extern void periodicTask(void);
 extern pthread_mutex_t	mutex;
+extern pthread_mutex_t	link_mutex;
 extern bool pushing;
 
 int tickCount = 0;
@@ -64,14 +74,16 @@ int seq_ui = 0;
 int node_id = 0;
 
 extern vector<Link> myLink;
-extern RRT<9> *rrt;
+//extern WbcRRT *rrt;
 extern PRM<9> *prm;
 double *value;
-double getPotential(int mode, const VectorXd &contact, const VectorXd &q, const VectorXd &q0);
+double getPotential(int mode, const VectorXd &contact, const WbcNode &node, const vector<VectorXd> &r0);
 VectorXd getQ(const VectorXd &uq);
 VectorXd getQa(const VectorXd &q);
 extern VectorXd elbow0;
 extern VectorXd elbow;
+extern VectorXd endeffector;
+extern void push(VectorXd dir);
 
 //MySim::MySim(int xx, int yy, int width, int height) : Fl_Widget(xx, yy, width, height, "")
 MySim::MySim(int xx, int yy, int width, int height) : Fl_Gl_Window(xx, yy, width, height, "")
@@ -369,7 +381,7 @@ extern double	min_pos[2], max_pos[2];
 		glutSolidSphere(0.025,20,20);
 		glPopMatrix();
 #endif
-		myLink[index].theta = q[index];
+//		myLink[index].theta = q[index];
 		index ++;
 
 //		Link link1;
@@ -420,10 +432,13 @@ extern double	min_pos[2], max_pos[2];
 
 	VectorXd Q = q;
 
+
 	if ( qp->size() )
 		Q = (*qp)[seq];
 	if ( prm->numNodes > 0 && node_id > 0 )
 		Q = getQ(prm->nodes[node_id-1]->q);
+
+	pthread_mutex_unlock(&mutex);
 
 //	for ( ; it != qp->end() ; it++ )
 	{
@@ -451,7 +466,6 @@ extern double	min_pos[2], max_pos[2];
 			drawBlock(0.025, 0.05);
 			glPushMatrix();
 			glTranslatef(pNode->com(0), pNode->com(1), pNode->com(2));
-			myLink[index].theta = Q(index);
 	//		glutSolidSphere(0.025,20,20);
 			glPopMatrix();
 			index ++;
@@ -460,9 +474,11 @@ extern double	min_pos[2], max_pos[2];
 		glPopMatrix();
 #if 1
 	//	VectorXd r = myLink[5].getGlobal(myLink[5].com);
-		VectorXd r;
-		for ( i = 0 ; i < 9 ; i++ )
+		VectorXd r, r1;
+		pthread_mutex_lock(&link_mutex);
+		for ( i = 0 ; i < 10 ; i++ )
 		{
+			myLink[i].setTheta(Q(i));
 			r = myLink[i].getGlobal(myLink[i].com);
 			glPushMatrix();
 			glColor3f(1.0, 1.0, 1.0);
@@ -472,14 +488,24 @@ extern double	min_pos[2], max_pos[2];
 		}
 
 		r = myLink[5].getGlobal(VectorXd::Zero(3));
+		VectorXd hand = VectorXd::Zero(3);
+		hand(1) = -0.05;
+		r1 = myLink[9].getGlobal(hand);
+		pthread_mutex_unlock(&link_mutex);
+
 		glPushMatrix();
 		glColor3f(1.0, 0.0, 0.0);
 		glTranslatef(r(0), r(1), r(2));
 		glutSolidSphere(0.040,20,20);
 		glPopMatrix();
+
+		glPushMatrix();
+		glColor3f(0.0, 0.0, 1.0);
+		glTranslatef(r1(0), r1(1), r1(2));
+		glutSolidSphere(0.040,20,20);
+		glPopMatrix();
 #endif
 	}
-	pthread_mutex_unlock(&mutex);
 
 	glPushMatrix();
 	glColor3f(1.,0.,0.);
@@ -505,6 +531,12 @@ extern double	min_pos[2], max_pos[2];
 	glVertex3f(elbow0(0), elbow0(1), elbow0(2));
 	glVertex3f(elbow(0), elbow(1), elbow(2));
 	glEnd();
+
+	glPushMatrix();
+	glColor3f(0.,1.,0.);
+	glTranslatef(endeffector(0), endeffector(1), endeffector(2));
+	glutSolidSphere(0.025,20,20);
+	glPopMatrix();
 
 
 //	fprintf(stderr, "%f %f %f %f %f %f\n", torque[0], torque[1], torque[2], force[0], force[1], force[2]); 
@@ -724,7 +756,13 @@ timer_cb(void * param)
 		paused_ready = false;
 */
 
-	reinterpret_cast<MyWindow*>(param)->mSeqSlider->bounds(0., (double)(qp1.size()));
+	vector<VectorXd> *qp;
+	if ( bPath )
+		qp = &qp1;
+	else
+		qp = &qp2;
+
+	reinterpret_cast<MyWindow*>(param)->mSeqSlider->bounds(0., (double)(qp->size()));
 	reinterpret_cast<MyWindow*>(param)->mNodeSlider->bounds(0., (double)(prm->numNodes));
 
 	Fl::repeat_timeout(dt, // gets initialized within tickCount()
@@ -776,6 +814,7 @@ cb_plan(Fl_Widget *widget, void *param)
 void MyWindow::
 cb_path(Fl_Widget *widget, void *param)
 {
+
 	bPath = !bPath;
 }
 
@@ -794,78 +833,31 @@ cb_send(Fl_Widget *widget, void *param)
 }
 
 int push_type = 0;
-void MyWindow::
-cb_push(Fl_Widget *widget, void *param)
-{
-	int i, j ;
-
-	if ( bPlanning )
-		return;
-
-	if ( !rrt || rrt->numNodes == 0 )
-		return;
-
-	for ( j = 0 ; j < 10 ; j++ )
-	{
-		myLink[j].theta = q[j];
-	}
-	VectorXd contact = myLink[5].getGlobal(VectorXd::Zero(3));
-
-	cerr << "Start Pushing... " << contact.transpose() << " : " << push_type << endl;
-
-	double	max = -100000.;
-	int		max_idx = 0;
-
-	cerr << "getPotential" << endl;
-	cerr << contact.transpose() << endl;
-	cerr << q0.transpose() << endl;
-	value = (double *)malloc(sizeof(double)*rrt->numNodes);
-	pthread_mutex_lock(&mutex);
-	for ( i = rrt->numNodes-1 ; i >= 0 ; i-- )
-//	for ( i = 0 ; i < rrt->numNodes ; i++ )
-	{
-		Node<9> *pNode = rrt->nodes[i];
-		VectorXd Q = getQ(pNode->q);
-
-		double sum = getPotential(push_type, contact, Q, q0);
-		value[i] = sum;
-		
-		if ( sum > max )
-		{
-			max		= sum;
-			max_idx	= i;
-//			cerr << "MAX " << max_idx << ": " << max <<endl;
-//			cerr << Q.transpose() << endl;
-//			cerr << q0.transpose() << endl;
-		}
-	}
-	pthread_mutex_unlock(&mutex);
-	cerr << "MAX " << max_idx << ": " << max << " " << i << endl;
-
-	bRandom = true;;
-	goalIdx = max_idx;
-	tickCount = 0;
-}
 
 void MyWindow::
 cb_pushx(Fl_Widget *widget, void *param)
 {
-	push_type = 0;
-	cb_push(widget, param);
+	VectorXd dir = VectorXd::Zero(3);
+	dir(0) = 1;
+	push(dir);
 }
 void MyWindow::
 cb_pushy(Fl_Widget *widget, void *param)
 {
-	push_type = 1;
-	cb_push(widget, param);
+	VectorXd dir = VectorXd::Zero(3);
+	dir(1) = -1;
+	push(dir);
 }
 void MyWindow::
 cb_pushz(Fl_Widget *widget, void *param)
 {
-	push_type = 2;
-	cb_push(widget, param);
+	VectorXd dir = VectorXd::Zero(3);
+	dir(2) = 1;
+	push(dir);
 }
 
+extern bool getPotentialVerbose;
+extern int pushType;
 void MyWindow::
 cb_seq(Fl_Widget *widget, void *param)
 {
@@ -873,18 +865,30 @@ cb_seq(Fl_Widget *widget, void *param)
 	seq_ui = (int)pSlider->value();
 	int seq = seq_ui - 1;
 
-	if ( seq > 0 )
+	if ( seq >= 0 )
 	{
-		VectorXd contact	= myLink[5].getGlobal(VectorXd::Zero(3));
+		VectorXd contact	= elbow0;
 
 		pthread_mutex_lock(&mutex);
-		VectorXd Q = qp1[seq]; 
+		vector<VectorXd> *qp;
+		if ( bPath )
+			qp = &qp1;
+		else
+			qp = &qp2;
+		VectorXd Q = (*qp)[seq]; 
 		pthread_mutex_unlock(&mutex);
 
-		double val = getPotential(0, contact, Q, q0);
+		WbcNode node;
+
+		node.q = getQa(Q);
+		node.getProjection();
+
+		getPotentialVerbose = true;
+		double val = getPotential(pushType, contact, node, r0);
 
 		cerr << seq << ": " << val << ":" << Q.transpose() * 180. / M_PI << endl;
 	}
+	getPotentialVerbose = false;
 }
 
 void MyWindow::

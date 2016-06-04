@@ -37,29 +37,49 @@ Link::Link(void)
 	com = trans = VectorXd::Zero(3);
 	mass	= 0.;
 	parent = NULL;
+	dirty	= true;
+}
+
+double Link::setTheta(double theta_)
+{
+	dirty = true;
+	return theta = theta_;
+}
+
+double Link::getTheta(void)
+{
+	return theta;
 }
 
 VectorXd Link::getGlobal(const VectorXd &local)
 {
 	VectorXd	ret;
-	MatrixXd	act;
-	int			x, y;
-	int			axismap[3][2] = {{1,2}, {2,0}, {0,1}};
 
-	x = axismap[axis][0];
-	y = axismap[axis][1];
+	if ( dirty )
+	{
+		MatrixXd	act;
+		int			x, y;
+		int			axismap[3][2] = {{1,2}, {2,0}, {0,1}};
 
-	assert(x < 3);
-	assert(y < 3);
+		x = axismap[axis][0];
+		y = axismap[axis][1];
 
-	act = MatrixXd::Identity(3,3);
+		assert(x < 3);
+		assert(y < 3);
 
-	act(x,x) = cos(theta);
-	act(x,y) = -sin(theta);
-	act(y,x) = sin(theta);
-	act(y,y) = cos(theta);
+		act = MatrixXd::Identity(3,3);
 
-	ret = rot * act * local + trans;
+		act(x,x) = cos(theta);
+		act(x,y) = -sin(theta);
+		act(y,x) = sin(theta);
+		act(y,y) = cos(theta);
+
+		rot2 = rot * act;
+
+		dirty = false;
+	}
+
+	ret = rot2 * local + trans;
 
 	if ( parent )
 		ret = parent->getGlobal(ret);

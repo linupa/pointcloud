@@ -12,7 +12,7 @@
 
 #include <boost/scoped_ptr.hpp>
 
-#include "rrt.hpp"
+#include "wbcrrt.h"
 #include "prm.hpp"
 #include "xml.h"
 
@@ -59,24 +59,27 @@ int goalIdx = -1;
 bool bSend = false;
 extern VectorXd q;
 extern VectorXd q0;
+extern vector<VectorXd> r0;
 extern vector<VectorXd> qp1;
 extern vector<VectorXd> qp2;
 static double dt = 0.001;
-Vector desired_pos;
+VectorXd desired_pos;
 extern int tickCount;
 extern int seq; 
 vector<Link> myLink(10);
-RRT<9> *rrt;
+WbcRRT *rrt;
 PRM<9> *prm;
 extern double *value;
+extern int seq_ui;
 
 Vector elbow0;
 Vector elbow;
 Vector error;
 
-template<int T>
-MatrixXd getProjection(Node<T> &p);
-double getPotential(int mode, const VectorXd &contact, const VectorXd &q, const VectorXd &q0);
+VectorXd endeffector;
+
+void push(VectorXd dir);
+double getPotential(int mode, const VectorXd &contact, const WbcNode &node, const vector<VectorXd> &r0);
 
 VectorXd getQ(const VectorXd &uq)
 {
@@ -103,38 +106,10 @@ VectorXd getQa(const VectorXd &q)
 
 pthread_mutex_t	mutex;
 pthread_mutex_t	model_mutex;
+pthread_mutex_t link_mutex;
 
 Comm *pRecvComm;
 Comm *pCmdComm;
-
-// Checking process time
-int start_time_sec;
-int start_time_usec;
-int ts[10][2] = {{0}};
-void mark_start_time(void)
-{
-	struct timeval tv;
-
-	gettimeofday(&tv, NULL);
-
-	start_time_sec	= tv.tv_sec;
-	start_time_usec	= tv.tv_usec;
-}
-
-int get_elapsed(void)
-{
-	struct timeval tv;
-
-	int usec;
-	int sec;
-
-	gettimeofday(&tv, NULL);
-
-	usec	= tv.tv_usec - start_time_usec;
-	sec		= tv.tv_sec - start_time_sec;
-
-	return (sec*1000000 + usec); 
-}
 
 void periodicTask(void);
 int main(int argc, char *argv[])
@@ -180,6 +155,7 @@ int main(int argc, char *argv[])
 	XmlNode *node = baseNode.childs;
 
 	q = VectorXd::Zero(10);
+	endeffector = VectorXd::Zero(3);;
 	q0 = q;
 
 	int i = 0;
@@ -204,17 +180,28 @@ int main(int argc, char *argv[])
 		node = node->childs;
 		i++;
 	}
+
+	r0.clear();
+	for ( int j = 0 ; j < 10 ; j++ )
+	{
+		myLink[j].setTheta(q0[j]);
+	}
+	for ( int j = 0 ; j < 10 ; j++ )
+	{
+		r0.push_back(myLink[j].getGlobal(myLink[j].com));
+	}
 	
 	glutInit(&argc, argv);
 
 	pthread_mutex_init( &mutex, NULL );
 	pthread_mutex_init( &model_mutex, NULL );
+	pthread_mutex_init( &link_mutex, NULL );
 
 	model.reset(test::parse_sai_xml_file(robot_spec, false));
 	model->setConstraint("Dreamer_Torso");
 
-	model_planning.reset(test::parse_sai_xml_file(robot_spec, false));
-	model_planning->setConstraint("Dreamer_Torso");
+	WbcNode::model.reset(test::parse_sai_xml_file(robot_spec, false));
+	WbcNode::model->setConstraint("Dreamer_Torso");
 
 	pthread_create( &planning_thread, NULL, plan, NULL);
 
@@ -299,7 +286,8 @@ void periodicTask(void)
 
 			if ( (count%1000) == 0 )
 			{
-				Node<9> node;
+#if 0
+				WbcNode node;
 				VectorXd qa;
 				VectorXd q_des;
 				VectorXd q_err;
@@ -312,8 +300,7 @@ void periodicTask(void)
 				q_err = qa - q_des;
 				node.q = qa;
 
-				tau = getProjection(node)*q_err;
-#if 0
+				tau = node.getProjection()*q_err;
 				cerr << "=== Posture ===" << endl;
 				cerr << q.transpose() << endl;
 				cerr << q_err.transpose() << endl;
@@ -337,9 +324,9 @@ void periodicTask(void)
 #if 1
 		if ( !bPlanning )
 		{
-			Node<9> node;
+			WbcNode node;
 			node.q = body_state.position_;
-			getProjection(node);
+			node.getProjection();
 
 			desired_pos = node.actual;
 		}
@@ -347,64 +334,66 @@ void periodicTask(void)
 
 		int j;
 
+		pthread_mutex_lock(&link_mutex);
 		for ( j = 0 ; j < 10 ; j++ )
 		{
-			myLink[j].theta = q0[j];
+			myLink[j].setTheta(q0[j]);
 		}
 		elbow0 = myLink[5].getGlobal(VectorXd::Zero(3));
 
 		for ( j = 0 ; j < 10 ; j++ )
 		{
-			myLink[j].theta = q[j];
+			myLink[j].setTheta(q[j]);
 		}
 		elbow = myLink[5].getGlobal(VectorXd::Zero(3));
+		pthread_mutex_unlock(&link_mutex);
 
 		error = elbow - elbow0;
 
-		if ( error(0) > 0.03 && bPlanning == false && pushing == false)
+		if ( seq_ui == 0 && rrt->numNodes > 0 && bPlanning == false && pushing == false)
 		{
-			cerr << "====================================" << endl;
-			cerr << " Push Forward " << endl;
-			cerr << "====================================" << endl;
-			push_type = 1;
-			MyWindow::cb_push(NULL, NULL);
-			pushing = true;
-		}
-#if 0
-		if ( error(1) < -0.03 && bPlanning == false && pushing == false)
-		{
-			cerr << "====================================" << endl;
-			cerr << " Push Right " << endl;
-			cerr << elbow.transpose() << " " << elbow0.transpose() << endl;
-			cerr << "====================================" << endl;
-			push_type = 1;
-			MyWindow::cb_push(NULL, NULL);
-			pushing = true;
-		}
-#endif
-		if ( error(2) > 0.03 && bPlanning == false && pushing == false)
-		{
-			cerr << "====================================" << endl;
-			cerr << " Push Up " << endl;
-			cerr << elbow.transpose() << " " << elbow0.transpose() << endl;
-			cerr << "====================================" << endl;
-			push_type = 2;
-			MyWindow::cb_push(NULL, NULL);
-			pushing = true;
-		}
+			if ( error(0) > 0.03 && bPlanning == false && pushing == false)
+			{
+				cerr << "====================================" << endl;
+				cerr << " Push Forward " << error(0) << endl;
+				cerr << "====================================" << endl;
+				VectorXd dir = VectorXd::Zero(3);
+				dir(0) = 1;
+				push(dir);
+				pushing = true;
+			}
+			if ( error(1) < -0.03 && bPlanning == false && pushing == false)
+			{
+				cerr << "====================================" << endl;
+				cerr << " Push Right " << endl;
+				cerr << elbow.transpose() << " " << elbow0.transpose() << endl;
+				cerr << "====================================" << endl;
+				VectorXd dir = VectorXd::Zero(3);
+				dir(1) = -1;
+				push(dir);
+				pushing = true;
+			}
+			if ( error(2) > 0.03 && bPlanning == false && pushing == false)
+			{
+				cerr << "====================================" << endl;
+				cerr << " Push Up " << error(2) << endl;
+				cerr << elbow.transpose() << " " << elbow0.transpose() << endl;
+				cerr << "====================================" << endl;
+				VectorXd dir = VectorXd::Zero(3);
+				dir(2) = 1;
+				push(dir);
+				pushing = true;
+			}
 //		cerr << "PUSH " << bPlanning << " " << pushing << endl;
+		}
 	}
 	else
 	{
 
-		mark_start_time();
 		ts1.setBaseline();
 
 		model->update(body_state);
 
-		get_elapsed();
-		ts[0][0] += get_elapsed();
-		ts[0][1] ++;
 		ts1.checkElapsed(0);
 
 		fullJpos_ = model->getFullState().position_;
@@ -421,9 +410,6 @@ void periodicTask(void)
 		constraint->getU(U);
 		UNc = U*Nc;
 
-		get_elapsed();
-		ts[1][0] += get_elapsed();
-		ts[1][1] ++;
 		ts1.checkElapsed(1);
 
 #if 1
@@ -433,9 +419,6 @@ void periodicTask(void)
 			0.0, -0.05, 0.0, ee_transform);
 		actual_ = ee_transform.translation();
 
-		get_elapsed();
-		ts[2][0] += get_elapsed();
-		ts[2][1] ++;
 		ts1.checkElapsed(2);
 
 		model->computeJacobian(end_effector_node_, actual_[0], actual_[1], actual_[2], Jfull);
@@ -444,9 +427,6 @@ void periodicTask(void)
 		MatrixXd J = getJacobian(*model);
 #endif
 		
-		get_elapsed();
-		ts[3][0] += get_elapsed();
-		ts[3][1] ++;
 		ts1.checkElapsed(3);
 
 		double kp = 100., kd = 10.0;
@@ -463,9 +443,6 @@ void periodicTask(void)
 			0.0001,
 			Lambda1, 0);
 
-		get_elapsed();
-		ts[4][0] += get_elapsed();
-		ts[4][1] ++;
 		ts1.checkElapsed(4);
 
 		desired_pos(0) = 0.3;
@@ -519,11 +496,9 @@ void periodicTask(void)
 		body_state.position_ = getQa(fullJpos_);
 		body_state.velocity_ = getQa(fullJvel_);
 		q						= fullJpos_;
+		endeffector				= actual_;
 #endif
 	//	cerr << fullJvel_(1) << " " << fullJvel_(2) << endl;
-		get_elapsed();
-		ts[5][0] += get_elapsed();
-		ts[5][1] ++;
 		ts1.checkElapsed(5);
 	}
 
@@ -534,13 +509,6 @@ void periodicTask(void)
 		{
 			if ( bSimul )
 			{
-				fprintf(stderr, "Average Time %f %f %f %f %f %f\n", 
-						(double)ts[0][0] / ts[0][1],
-						(double)ts[1][0] / ts[1][1],
-						(double)ts[2][0] / ts[2][1],
-						(double)ts[3][0] / ts[3][1],
-						(double)ts[4][0] / ts[4][1],
-						(double)ts[5][0] / ts[5][1]);
 				cout << ts1;
 				cout << "stat " << body_state.position_.transpose() << endl;
 				cout << "q " << q[1] << " " << q[2] << endl;
@@ -594,7 +562,7 @@ double maxs[] = {	 90.,	 43,	200,	150,	 85,	133,	230,	 60,	 60};
 //double mins[] = {	-90.,	-22,	-80,	-23,	-85,	  0,	-48,	-60,	-60};
 //double maxs[] = {	 90.,	 49,	200,	150,	 85,	133,	230,	 60,	 60};
 template <int T>
-double project2( const Node<T> &p, Node<T> &np );
+double project2( const Node<T> *p, Node<T> *np );
 
 template <int T>
 double project1( Node<T> &np );
@@ -617,14 +585,14 @@ void *plan(void *)
 	{
 		int next_count = 1000;
 
-		rrt = new RRT<9>(Mins, Maxs, STEP);
+		rrt = new WbcRRT(Mins, Maxs, STEP);
 		prm->init();
-//		rrt = new RRT<9>(-M_PI, M_PI, STEP);
+//		rrt = new WbcRRT<9>(-M_PI, M_PI, STEP);
 #if 0
 		Node<9> *newNode = new Node<9>;
 
 		newNode->q = body_state.position_;
-		getProjection(*newNode);
+		newNode->getProjection();
 		newNode->parent = NULL;
 		rrt->nodes[rrt->numNodes++] = newNode;
 #else
@@ -635,19 +603,30 @@ void *plan(void *)
 			rrt->qs[0][i] = rrt->nodes[0]->q(i);
 		}
 		
-		getProjection(*(rrt->nodes[0]));
+		((WbcNode *)rrt->nodes[0])->getProjection();
 #endif
 
 
 		int count = 0;
 		q0 = getQ(body_state.position_);
+		r0.clear();
+		pthread_mutex_lock(&link_mutex);
+		for ( int j = 0 ; j < 10 ; j++ )
+		{
+			myLink[j].setTheta(q[j]);
+		}
+		for ( int j = 0 ; j < 10 ; j++ )
+		{
+			r0.push_back(myLink[j].getGlobal(myLink[j].com));
+		}
+		pthread_mutex_unlock(&link_mutex);
 		fprintf(stderr, "Start Planning... %d,%d\n", rrt->numNodes, rrt->numEdges);
 		cerr << q0.transpose() << endl;
 		while (bPlan)
 		{
 			bPlanning = true;
 
-			rrt->iterate( project2 );
+			rrt->iterate();
 //			prm->addNode(project1);
 
 	//		usleep(1000);
@@ -655,7 +634,7 @@ void *plan(void *)
 				if ( rrt->numNodes > next_count )
 				{
 					fprintf(stderr, "%d nodes added\n", rrt->numNodes);	
-					Node<9> *p = rrt->nodes[rrt->numNodes-1];
+					WbcNode *p = (WbcNode *)(rrt->nodes[rrt->numNodes-1]);
 
 					cerr << p << endl;
 					cerr << p->q.transpose() << endl;
@@ -681,34 +660,36 @@ void *plan(void *)
 		{
 			if ( bRandom && rrt->numNodes > 1 )
 			{
+				Timestamp ts1("Path Planning Time");
+				ts1.setMode(Timestamp::MODE_SHOW_MSEC | Timestamp::MODE_OVERLAP);
+				ts1.setBaseline();
+
 				pthread_mutex_lock(&mutex);
 				qp1.clear();
 				qp2.clear();
 
-				Path<9> path;
-				{
-					int from = 0;
-		//			int from = (int)((double)rand() * (double)rrt->numNodes / RAND_MAX);
-					int to;
-					
-					if ( goalIdx < 0 )
-						to = (int)((double)rand() * (double)rrt->numNodes / RAND_MAX);
-					else
-						to = goalIdx;
+				int from = 0;
+	//			int from = (int)((double)rand() * (double)rrt->numNodes / RAND_MAX);
+				int to;
+				
+				if ( goalIdx < 0 )
+					to = (int)((double)rand() * (double)rrt->numNodes / RAND_MAX);
+				else
+					to = goalIdx;
 //					from = rrt->numNodes-1;
 //					to = 0;
-					fprintf(stderr, "NODE %d->%d/%d\n", from, to, rrt->numNodes);
-					path = Path<9>(rrt->nodes[from], rrt->nodes[to]);
-					path.step = 0.01*M_PI;
-					path.optimize(project2, 100);
-		//			path.optimize(NULL, 10);
-				}
+				fprintf(stderr, "NODE %d->%d/%d\n", from, to, rrt->numNodes);
+				WbcPath path(rrt->nodes[from], rrt->nodes[to]);
+				path.step = 0.01*M_PI;
+				path.optimize(100);
+	//			path.optimize(NULL, 10);
+
+				ts1.checkElapsed(0);
 				Node<9> *p = rrt->nodes[rrt->numNodes-1];
-				list<Node<9> >::iterator it = path.newNodes.begin();
-				cerr << "Optimal path " << path.newNodes.size() << " nodes" << endl;
-				for ( ; it != path.newNodes.end() ; it++ )
+				cerr << "Optimal path " << path.numNewNode << " nodes" << endl;
+				for ( int i = 0 ; i < path.numNewNode ; i++ )
 				{
-					VectorXd q_plan= (*it).q;
+					VectorXd q_plan= path.newNodes[i]->q;
 					VectorXd Q;
 #if 0
 					Q = VectorXd::Zero(10);
@@ -722,12 +703,12 @@ void *plan(void *)
 #endif
 					qp1.push_back(Q);
 				}
+				ts1.checkElapsed(1);
 
-				cerr << "Original path " << path.nodes.size() << " nodes" << endl;
-				it = path.nodes.begin();
-				for ( ; it != path.nodes.end() ; it++ )
+				cerr << "Original path " << path.numNode << " nodes" << endl;
+				for ( int i = 0 ; i < path.numNode ; i++ )
 				{
-					VectorXd q_plan= (*it).q;
+					VectorXd q_plan= path.nodes[i]->q;
 					VectorXd Q;
 #if 0
 					Q = VectorXd::Zero(10);
@@ -740,16 +721,21 @@ void *plan(void *)
 					Q = getQ(q_plan);
 #endif
 					qp2.push_back(Q);
+#if 0
 					cerr << value[(*it).index] << " > ";
 
-					double val = getPotential(0, VectorXd::Zero(3), Q, q0);
+					double val = getPotential(0, VectorXd::Zero(3), Q, r0);
 					cerr << "(" << val << ")"; 
+#endif
 				}
-				cerr << endl;
+//				cerr << endl;
 				pthread_mutex_unlock(&mutex);
 				bRandom = false;
+				ts1.checkElapsed(2);
+
+				cerr << ts1;
 			}
-			usleep(100000);
+			usleep(10);
 		}
 
 		delete rrt;
@@ -757,97 +743,15 @@ void *plan(void *)
 	}
 }
 
-template<int T>
-MatrixXd getProjection(Node<T> &p)
-{
-	MatrixXd ainv;
-	MatrixXd Nc;
-	MatrixXd UNc;
-	MatrixXd U;
-	MatrixXd UNcBar;
-	MatrixXd phi;
-	MatrixXd phiinv; 
-	MatrixXd J1star;
-	MatrixXd J2star;
-	MatrixXd Lambda1;
-	MatrixXd Lambda2;
-	MatrixXd Lambda2P;
-	MatrixXd N1;
-	MatrixXd J, Jfull;
-	Vector actual_;
-
-	Constraint *constraint;
-
-	State state = body_state;
-	state.position_ = p.q;
-	state.velocity_ = VectorXd::Zero(state.velocity_.rows());
-
-	pthread_mutex_lock(&model_mutex);
-	model_planning->update(state);
-
-	model_planning->getInverseMassInertia(ainv);
-
-	constraint = model_planning->getConstraint();
-	constraint->getU(U);
-	constraint->updateJc(*model_planning);
-
-	constraint->getNc(ainv,Nc);
-
-	UNc = U*Nc;
-
-#if 1
-	taoDNode const *end_effector_node_ = model_planning->getNode(9);
-	jspace::Transform ee_transform;
-	model_planning->computeGlobalFrame(end_effector_node_,
-		0.0, -0.05, 0.0, ee_transform);
-	actual_ = ee_transform.translation();
-
-	get_elapsed();
-	ts[2][0] += get_elapsed();
-	ts[2][1] ++;
-
-	model_planning->computeJacobian(end_effector_node_, actual_[0], actual_[1], actual_[2], Jfull);
-	J = Jfull.block(0, 0, 3, Jfull.cols());
-#else
-	MatrixXd J = getJacobian(*model_planning);
-#endif
-	pthread_mutex_unlock(&model_mutex);
-
-	phi = UNc * ainv * UNc.transpose();
-	//XXXX hardcoded sigma threshold
-	pseudoInverse(phi,
-		0.0001,
-		phiinv, 0);
-	UNcBar = ainv * UNc.transpose() * phiinv;
-
-	J1star = J*UNcBar;
-	pseudoInverse( J1star * phi * J1star.transpose(),
-		0.0001,
-		Lambda1, 0);
-
-	N1 = MatrixXd::Identity(9,9) - phi*J1star.transpose()*Lambda1*J1star;
-	J2star = U*UNcBar*N1;
-	Lambda2P = J2star*phi*J2star.transpose();
-	pseudoInverse(Lambda2P,
-		0.0001,
-		Lambda2, 0);
-
-	p.projection		= Lambda2P * Lambda2;
-	p.traction			= phi*J1star.transpose()*Lambda1;
-	p.actual			= actual_;
-
-//	return Lambda2;
-	return p.projection;
-}
 
 template <int T>
-double project1( Node<T> &np )
+double project1( Node<T> *np )
 {
 	Vector dq0;
 	Vector dq;
-	Vector dst = np.q;
+	Vector dst = np->q;
 
-	assert(np.q.rows() == T);
+	assert(np->q.rows() == T);
 
 	int trial;
 	double err = 1.e10;
@@ -855,13 +759,13 @@ double project1( Node<T> &np )
 	bool violate = true;
 	for ( trial = 100 ; trial >= 0 ; trial-- )
 	{
-		np.projection	= getProjection(np);
+		np->getProjection();
 
 
-//	cerr << "New Node" << np.q.transpose()*180./M_PI << endl;
+//	cerr << "New Node" << np->q.transpose()*180./M_PI << endl;
 
 
-		Vector diff1 = desired_pos - np.actual;
+		Vector diff1 = desired_pos - np->actual;
 		err = diff1.norm();
 
 //	cerr << p.q.transpose() << endl;
@@ -874,12 +778,12 @@ double project1( Node<T> &np )
 
 		Vector modified;
 //		cerr << "From  : " << p.q.transpose()<<endl;
-//		cerr << "Before: " << np.q.transpose()<<endl;
-//		modified = np.q + np.traction * diff1 + np.projection * diff2;
-		modified = np.q + np.traction * diff1;
-		np.q = modified;
+//		cerr << "Before: " << np->q.transpose()<<endl;
+//		modified = np->q + np->traction * diff1 + np->projection * diff2;
+		modified = np->q + np->traction * diff1;
+		np->q = modified;
 
-		Vector diff2 = prm->center - np.q;
+		Vector diff2 = prm->center - np->q;
 		for ( int i = 0 ; i < T ; i++ )
 		{
 			if ( diff2[i] > M_PI )
@@ -887,13 +791,13 @@ double project1( Node<T> &np )
 			if ( diff2[i] < -M_PI )
 				diff2[i] += 2.*M_PI;
 		}
-		np.q = prm->center - diff2;
-		np.projection	= getProjection(np);
+		np->q = prm->center - diff2;
+		np->getProjection();
 		MatrixXd weight = prm->weight;
 		violate = false;
 		for ( int i = 0 ; i < T ; i++ )
 		{
-			if ( (np.q(i) < Mins[i]) || (np.q(i) > Maxs[i]) )
+			if ( (np->q(i) < Mins[i]) || (np->q(i) > Maxs[i]) )
 			{
 				violate = true;
 				break;
@@ -903,10 +807,10 @@ double project1( Node<T> &np )
 				weight(i,i) = 0.;
 			}
 		}
-		modified = np.q + np.projection * weight * diff2;
-		np.q = modified;
-//		cerr << "After : " << np.q.transpose()<<endl;
-//		getProjection(np);
+		modified = np->q + np->projection * weight * diff2;
+		np->q = modified;
+//		cerr << "After : " << np->q.transpose()<<endl;
+//		np->getProjection();
 #endif
 	}
 	if ( err > 0.01 || violate )
@@ -918,7 +822,7 @@ double project1( Node<T> &np )
 	cerr << "Found" << endl;
 
 #if 0
-	Vector diff = np.q - prm->center;
+	Vector diff = np->q - prm->center;
 	for ( int i = 0 ; i < T ; i++ )
 	{
 		if ( diff[i] > M_PI )
@@ -926,7 +830,7 @@ double project1( Node<T> &np )
 		if ( diff[i] < -M_PI )
 			diff[i] += 2.*M_PI;
 	}
-	np.q = prm->center + diff;
+	np->q = prm->center + diff;
 
 	violate = true;
 	MatrixXd weight = prm->weight;
@@ -936,14 +840,14 @@ double project1( Node<T> &np )
 		Vector diff2;
 
 
-		getProjection(np);
-		diff2 = prm->center - np.q;
+		np->getProjection();
+		diff2 = prm->center - np->q;
 
-		modified = np.q + np.projection * weight * diff2;
-		np.q = modified;
+		modified = np->q + np->projection * weight * diff2;
+		np->q = modified;
 
 		violate = false;
-		Vector q = np.q;
+		Vector q = np->q;
 		weight = prm->weight;
 		for ( int i = 0 ; i < T ; i++ )
 		{
@@ -962,7 +866,7 @@ double project1( Node<T> &np )
 	if ( violate )
 	{
 		cerr << "Mins  : " << Mins.transpose()*180./M_PI << endl;
-		cerr << "EXCEED: " << np.q.transpose()*180./M_PI << endl;
+		cerr << "EXCEED: " << np->q.transpose()*180./M_PI << endl;
 		cerr << "Maxs  : " << Maxs.transpose()*180./M_PI << endl;
 		err = -1.;
 	}
@@ -972,18 +876,24 @@ double project1( Node<T> &np )
 	return err;
 }
 template <int T>
-double project2( const Node<T> &p, Node<T> &np )
+double project2( const Node<T> *_p, Node<T> *_np )
 {
+	WbcNode *p, *np;
 	Vector dq0;
 	Vector dq;
-	Vector dst = np.q;
+	Vector dst;
 
-	assert(np.q.rows() == T);
-	assert(p.q.rows() == T);
-	dq0 = np.q - p.q;
+	p = (WbcNode *)_p;
+	np = (WbcNode *)_np;
+
+	dst = np->q;
+
+	assert(np->q.rows() == T);
+	assert(p->q.rows() == T);
+	dq0 = np->q - p->q;
 //	double mag0 = dq0.norm();
 
-	dq = p.projection * dq0;
+	dq = p->projection * dq0;
 
 	double mag = dq.norm();
 
@@ -993,23 +903,23 @@ double project2( const Node<T> &p, Node<T> &np )
 	if ( dq0.transpose() * dq < 0)
 	{
 		cerr << "ERROR!!!: " << dq0.transpose() << ":" << dq.transpose() << endl;
-		cerr << p.projection << endl;
+		cerr << p->projection << endl;
 		assert(0);
 	}
 
 	dq = dq * STEP / mag;
 
-	np.q	= p.q + dq;
+	np->q	= p->q + dq;
 
-	VectorXd qdeg = np.q * 180. / M_PI;
+	VectorXd qdeg = np->q * 180. / M_PI;
 #ifdef CHECK_LIMIT
 	for ( int i = 0 ; i < T ; i++ )
 	{
 #if 0
 		if ( qdeg(i) < mins[i] ) 
-			np.q(i) = mins[i]*M_PI/180.;
+			np->q(i) = mins[i]*M_PI/180.;
 		if ( qdeg(i) > maxs[i] )
-			np.q(i) = maxs[i]*M_PI/180.;
+			np->q(i) = maxs[i]*M_PI/180.;
 #else
 		if ( (qdeg(i) < mins[i]) || (qdeg(i) > maxs[i]) )
 		{
@@ -1022,11 +932,11 @@ double project2( const Node<T> &p, Node<T> &np )
 #endif
 	}
 #endif
-//	cerr << "New Node" << np.q.transpose()*180./M_PI << endl;
+//	cerr << "New Node" << np->q.transpose()*180./M_PI << endl;
 
-	np.projection	= getProjection(np);
+	np->getProjection();
 
-	Vector diff = desired_pos - np.actual;
+	Vector diff = desired_pos - np->actual;
 	double err = diff.norm();
 
 
@@ -1035,7 +945,7 @@ double project2( const Node<T> &p, Node<T> &np )
 	if ( err > 0.05 )
 	{
 
-		cerr << "New   : " << np.actual.transpose() << endl;
+		cerr << "New   : " << np->actual.transpose() << endl;
 		cerr << "Error : " << diff.transpose() << endl;
 		cerr << "DES   : " << desired_pos.transpose() << endl;
 
@@ -1047,14 +957,90 @@ double project2( const Node<T> &p, Node<T> &np )
 		Vector modified;
 //		cerr << "From  : " << p.q.transpose()<<endl;
 //		cerr << "Before: " << np.q.transpose()<<endl;
-		modified = np.q + np.traction * diff;
-		np.q = modified;
+		modified = np->q + np->traction * diff;
+		np->q = modified;
 //		cerr << "After : " << np.q.transpose()<<endl;
-//		getProjection(np);
+//		np->getProjection();
 	}
 #endif
 
 	return mag;
+}
+
+//VectorXd pushError;
+int pushType;
+Timestamp pushTimestamp;
+void push(VectorXd dir)
+{
+	int i, j ;
+
+	if ( bPlanning )
+		return;
+
+	pushTimestamp = Timestamp("Push Check");
+	pushTimestamp.setBaseline();
+	pushTimestamp.setMode(Timestamp::MODE_OVERLAP | Timestamp::MODE_SHOW_MSEC);
+
+	if ( !rrt || rrt->numNodes == 0 )
+		return;
+
+	if ( dir(0) > 0.03 )
+		push_type = 1;
+	else if ( dir(1) < -0.03 )
+		push_type = 2;
+	else if ( dir(2) > 0.03 )
+		push_type = 3;
+	else
+		return;
+	pushType = push_type;
+
+	VectorXd contact = elbow0;
+
+	cerr << "Start Pushing... " << contact.transpose() << " : " << dir.transpose() << " " << push_type << endl;
+
+	double	max = -100000.;
+	int		max_idx = 0;
+
+	cerr << contact.transpose() << endl;
+	cerr << q0.transpose() << endl;
+	value = (double *)malloc(sizeof(double)*rrt->numNodes);
+
+	Timestamp ts0("Total Time"), ts1("Check Potential");
+	ts0.setMode(Timestamp::MODE_SHOW_SEC);
+	ts1.setMode(Timestamp::MODE_SHOW_USEC | Timestamp::MODE_SHOW_COUNT);
+	ts0.setBaseline();
+	pthread_mutex_lock(&mutex);
+	ts0.checkElapsed(0);
+	for ( i = rrt->numNodes-1 ; i >= 0 ; i-- )
+//	for ( i = 0 ; i < rrt->numNodes ; i++ )
+	{
+		ts1.setBaseline();
+		ts0.checkElapsed(1);
+		WbcNode *pNode = (WbcNode *)rrt->nodes[i];
+		VectorXd Q = getQ(pNode->q);
+
+		double sum = getPotential(push_type, contact, *pNode, r0);
+		value[i] = sum;
+		
+		if ( sum > max )
+		{
+			max		= sum;
+			max_idx	= i;
+//			cerr << "MAX " << max_idx << ": " << max <<endl;
+//			cerr << Q.transpose() << endl;
+//			cerr << q0.transpose() << endl;
+		}
+		ts1.checkElapsed(0);
+	}
+	ts0.checkElapsed(2);
+	pthread_mutex_unlock(&mutex);
+	cerr << "MAX " << max_idx << ": " << max << " " << i << endl;
+	cerr << ts0;
+	cerr << ts1;
+
+	bRandom = true;;
+	goalIdx = max_idx;
+	tickCount = 0;
 }
 
 double sgn(double in)
@@ -1065,49 +1051,84 @@ double sgn(double in)
 		return -1.;
 	return 0.;
 }
-double getPotential(int mode, const VectorXd &contact, const VectorXd &q, const VectorXd& q0)
+
+bool getPotentialVerbose = false;
+double getPotential(int mode, const VectorXd &contact, const WbcNode &node, const vector<VectorXd>& r0)
 {
 	int j;
 	double sum = 0.;
 	double weight[10] = {0.};
 	int mask[10] = {0};
+	double value[10];
 
-	weight[5] = 25.;
-	weight[6] = 25.;
+	weight[5] = 10.;
+	weight[6] = 10.;
+	weight[7] = 10.;
 	mask[5] = 1;
 	mask[6] = 1;
+	mask[7] = 1;
+//	VectorXd r[10];
 
-	assert(q.size() == 10 );
-	assert(q0.size() == 10 );
 
-	for ( j = 0 ; j < 10 ; j++ )
-	{
-		myLink[j].theta = q[j];
-	}
-	for ( j = 0 ; j < 10 ; j++ )
-	{
-		VectorXd r = myLink[j].getGlobal(myLink[j].com);
-		VectorXd d = r - contact;
-		
-//			sum += d.transpose() * d;
 #if 0
-		sum += d(2) * myLink[j].mass; // X-
-#else
-		switch (mode)
-		{
-		case 0:
-			sum += weight[j] * mask[j] * d(0) * d(0) * sgn(d(0)) * myLink[j].mass; // X-
-			break;
-		case 1:
-			sum -= weight[j] * mask[j] * d(1) * d(1) * sgn(d(1)) * myLink[j].mass; // Y-
-			break;
-		case 2:
-			sum += weight[j] * mask[j] * d(2) * d(2) * sgn(d(2)) * myLink[j].mass; // Z+
-			break;
-		}
-#endif
-		sum -= (1-mask[j]) * (q[j] - q0[j]) * (q[j] - q0[j]) * myLink[j].mass;
+	pthread_mutex_lock(&link_mutex);
+	VectorXd q = getQ(node.q);
+	for ( j = 0 ; j < 10 ; j++ )
+	{
+		myLink[j].setTheta(q[j]);
 	}
+	for ( j = 0 ; j < 10 ; j++ )
+	{
+		r[j] = myLink[j].getGlobal(myLink[j].com);
+	}
+	pthread_mutex_unlock(&link_mutex);
+#endif
+
+	for ( j = 0 ; j < 10 ; j++ )
+	{
+		VectorXd d = node.coms[j] - contact;
+//		VectorXd d = r[j] - contact;
+		
+		if ( mask[j] )
+		{
+			switch (mode)
+			{
+			case 1:
+				value[j] = weight[j] * d(0) * myLink[j].mass; // X-
+				break;
+			case 2:
+				value[j] = - weight[j] * d(1) * myLink[j].mass; // Y-
+				break;
+			case 3:
+				value[j] = weight[j] * d(2) * myLink[j].mass; // Z+
+				break;
+			}
+			if ( getPotentialVerbose )
+			{
+				cerr << d.transpose() << ":" << myLink[j].mass << "(" << value[j] << ")" << endl;
+			}
+		}
+		else
+		{
+			value[j] = - sqrt(((r0[j] - node.coms[j]).transpose() * (r0[j] - node.coms[j]))(0)) * myLink[j].mass;
+//			value[j] = - sqrt(((r0[j] - r[j]).transpose() * (r0[j] - r[j]))(0)) * myLink[j].mass;
+			if ( getPotentialVerbose )
+			{
+				cerr << (r0[j]-node.coms[j]).transpose() << ":" << myLink[j].mass << "(" << value[j] << ")" << endl;
+//				cerr << (r0[j]-r[j]).transpose() << ":" << myLink[j].mass << "(" << value[j] << ")" << endl;
+			}
+		}
+	}
+
+	sum = 0;
+	for ( j = 0 ; j < 10 ; j++ )
+	{
+//		if ( getPotentialVerbose )
+//			cerr << value[j] << ":" << myLink[j].mass << " ";
+		sum += value[j];
+	}
+//	if ( getPotentialVerbose )
+//		cerr << endl;
 
 	return sum;
 }

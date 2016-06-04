@@ -2,7 +2,7 @@ target = wbc
 os = $(shell uname -s)
 machine = $(shell uname -m)
 build = $(os)_$(machine)
-srcs = main.cpp xml.cpp mywindow.cpp rrt.cpp kin.cpp
+srcs = main.cpp xml.cpp mywindow.cpp wbcrrt.cpp kin.cpp
 objs = $(patsubst %.cpp,$(build)/%.o,$(srcs))
 tinyxmlobjs = tinyxml.o tinystr.o tinyxmlerror.o tinyxmlparser.o
 

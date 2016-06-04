@@ -1,4 +1,4 @@
-#ifndef ___KIN_H__
+#ifndef __KIN_H__
 #define __KIN_H__
 #include <iostream>
 #include <Eigen/Eigen>
@@ -21,16 +21,22 @@ public:
 	VectorXd	com;
 	VectorXd	trans;
 	MatrixXd	rot;	
-	double		theta;
+	MatrixXd	rot2;
 	double		mass;
 	int			axis;
 	Link		*parent;
+	bool		dirty;
 
 				Link(void);
 	VectorXd	getGlobal(const VectorXd &local);
 	void		setRot(VectorXd quat);
 	void		setRot(VectorXd axis, double deg);
 	Link 		&operator=(const Link &src);
+	double		setTheta(double theta_);
+	double		getTheta(void);
+
+private:
+	double		theta;
 };
 
 
