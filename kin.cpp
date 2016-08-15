@@ -3,13 +3,13 @@
 
 using namespace std;
 
-Links::Links(const Link &link)
+Joints::Joints(const Joint &link)
 {
-	const Link *src = &link;
-	Link *child = NULL;
+	const Joint *src = &link;
+	Joint *child = NULL;
 
 	do {
-		node = new Link(*src);
+		node = new Joint(*src);
 		if ( child )
 			child->parent = node;
 		child = node;
@@ -17,11 +17,11 @@ Links::Links(const Link &link)
 	while (src = src->parent);
 }
 
-Links::~Links(void)
+Joints::~Joints(void)
 {
 	do 
 	{
-		Link *link = node;
+		Joint *link = node;
 
 		node = node->parent;
 
@@ -31,7 +31,7 @@ Links::~Links(void)
 
 }
 
-Link::Link(void)
+Joint::Joint(void)
 {
 	rot = MatrixXd::Zero(3,3);
 	com = trans = VectorXd::Zero(3);
@@ -40,21 +40,19 @@ Link::Link(void)
 	dirty	= true;
 }
 
-double Link::setTheta(double theta_)
+double Joint::setTheta(double theta_)
 {
 	dirty = true;
 	return theta = theta_;
 }
 
-double Link::getTheta(void)
+double Joint::getTheta(void)
 {
 	return theta;
 }
 
-VectorXd Link::getGlobal(const VectorXd &local)
+void Joint::updateOri(void)
 {
-	VectorXd	ret;
-
 	if ( dirty )
 	{
 		MatrixXd	act;
@@ -78,20 +76,58 @@ VectorXd Link::getGlobal(const VectorXd &local)
 
 		dirty = false;
 	}
+}
+
+VectorXd Joint::getGlobalPos(const VectorXd &local)
+{
+	VectorXd	ret;
+
+	updateOri();
 
 	ret = rot2 * local + trans;
 
 	if ( parent )
-		ret = parent->getGlobal(ret);
+		ret = parent->getGlobalPos(ret);
 
 	return ret;
 }
 
-void Link::setRot(VectorXd quat)
+MatrixXd Joint::getGlobalOri( void )
+{
+	MatrixXd	ret;
+
+	updateOri();
+
+	ret = rot2;
+
+	if ( parent )
+		ret = parent->getGlobalOri() * ret;
+
+	return ret;
+}
+
+void Joint::getGlobalOri( double *mat )
+{
+	assert(mat);
+
+	MatrixXd _rot = getGlobalOri();
+
+	for ( int i = 0 ; i < 9 ; i++ )
+	{
+		int row = i/3;
+		int col = i%3;
+		mat[col*4+row] = _rot(row,col);
+	}
+	mat[15] = 1;
+
+	return;
+}
+
+void Joint::setRot(VectorXd quat)
 {
 }
 
-void Link::setRot(VectorXd axis0, double rad)
+void Joint::setRot(VectorXd axis0, double rad)
 {
 	MatrixXd	Q, T;
 	VectorXd	absAxis;
@@ -251,7 +287,7 @@ void Link::setRot(VectorXd axis0, double rad)
 
 }
 
-Link &Link::operator=(const Link &src)
+Joint &Joint::operator=(const Joint &src)
 {
 	com		= src.com;
 	trans	= src.trans;
@@ -263,3 +299,87 @@ Link &Link::operator=(const Link &src)
 
 	return  *this;
 }
+
+#define SMALL_NUM (0.01)
+
+double
+Link::getDistance( Link &S1, Link &S2)
+{
+	pos3D   u;
+	pos3D   v;
+	pos3D   w;
+	u.sub( S1.to, S1.from);
+	v.sub( S2.to, S2.from);
+	w.sub( S1.from, S2.from);
+	double    a = pos3D::dot(u,u);         // always >= 0
+	double    b = pos3D::dot(u,v);
+	double    c = pos3D::dot(v,v);         // always >= 0
+	double    d = pos3D::dot(u,w);
+	double    e = pos3D::dot(v,w);
+	double    D = a*c - b*b;        // always >= 0
+	double    sc, sN, sD = D;       // sc = sN / sD, default sD = D >= 0
+	double    tc, tN, tD = D;       // tc = tN / tD, default tD = D >= 0
+		
+	// compute the line parameters of the two closest points
+	if (D < SMALL_NUM) { // the lines are almost parallel
+		sN = 0.0;         // force using point P0 on segment S1
+		sD = 1.0;         // to prevent possible division by 0.0 later
+		tN = e;
+		tD = c;
+	}
+	else {                 // get the closest points on the infinite lines
+		sN = (b*e - c*d);
+		tN = (a*e - b*d);
+		if (sN < 0.0) {        // sc < 0 => the s=0 edge is visible
+		sN = 0.0;
+		tN = e;
+		tD = c;
+	}
+	else if (sN > sD) {  // sc > 1  => the s=1 edge is visible
+		sN = sD;
+		tN = e + b;
+		tD = c;
+		}
+	}
+		
+	if (tN < 0.0) {            // tc < 0 => the t=0 edge is visible
+		tN = 0.0;
+		// recompute sc for this edge
+		if (-d < 0.0)
+			sN = 0.0;
+		else if (-d > a)
+			sN = sD;
+		else {
+			sN = -d;
+			sD = a;
+		}
+	}
+	else if (tN > tD) {      // tc > 1  => the t=1 edge is visible
+		tN = tD;
+		// recompute sc for this edge
+		if ((-d + b) < 0.0)
+			sN = 0;
+		else if ((-d + b) > a)
+			sN = sD;
+		else {
+			sN = (-d +  b);
+			sD = a;
+		}
+	}
+	// finally do the division to get sc and tc
+	sc = (abs(sN) < SMALL_NUM ? 0.0 : sN / sD);
+	tc = (abs(tN) < SMALL_NUM ? 0.0 : tN / tD);
+		
+	// get the difference of the two closest points
+	pos3D  v1, v2, v3, dP; 
+	v1 = u;
+	v1.mul(sc);
+	v2 = v;
+	v2.mul(tc);
+	v3.sub(v1,v2);
+	dP.add(w, v3);
+//	dP.add(w + (sc * u) - (tc * v);  // =  S1(sc) - S2(tc)
+			
+	return pos3D::norm2(dP);   // return the closest distance
+}
+	

@@ -5,17 +5,17 @@
 
 using namespace Eigen;
 
-class Link;
+class Joint;
 
-class Links
+class Joints
 {
 public:
-	Link *node;
-	Links(const Link &link);
-	~Links(void);
+	Joint *node;
+	Joints(const Joint &link);
+	~Joints(void);
 };
 
-class Link
+class Joint
 {
 public:
 	VectorXd	com;
@@ -24,19 +24,76 @@ public:
 	MatrixXd	rot2;
 	double		mass;
 	int			axis;
-	Link		*parent;
+	Joint		*parent;
 	bool		dirty;
 
-				Link(void);
-	VectorXd	getGlobal(const VectorXd &local);
+				Joint(void);
+	void		updateOri(void);
+	VectorXd	getGlobalPos(const VectorXd &local);
+	MatrixXd	getGlobalOri(void);
+	void		getGlobalOri(double *mat);
 	void		setRot(VectorXd quat);
 	void		setRot(VectorXd axis, double deg);
-	Link 		&operator=(const Link &src);
+	Joint 		&operator=(const Joint &src);
 	double		setTheta(double theta_);
 	double		getTheta(void);
 
 private:
 	double		theta;
+};
+
+class pos3D
+{
+	double x[3];
+
+	public:
+	pos3D& add(pos3D &p1, pos3D & p2)
+	{
+		x[0] = p1.x[0] + p2.x[0];
+		x[1] = p1.x[1] + p2.x[1];
+		x[2] = p1.x[2] + p2.x[2];
+
+		return *this;
+	}
+	pos3D& sub(pos3D &p1, pos3D & p2)
+	{
+		x[0] = p1.x[0] - p2.x[0];
+		x[1] = p1.x[1] - p2.x[1];
+		x[2] = p1.x[2] - p2.x[2];
+
+		return *this;
+	}
+	pos3D& mul(double val)
+	{
+		x[0] = x[0] * val;
+		x[1] = x[1] * val;
+		x[2] = x[2] * val;
+
+		return *this;
+	}
+	double& operator[](int index)
+	{
+		return x[index];
+	}
+	static double dot(pos3D &p1, pos3D &p2)
+	{
+		return p1.x[0]*p2.x[0] + p1.x[1]*p2.x[1] + p1.x[2]*p2.x[2];
+	}
+	static double norm2(pos3D &p)
+	{
+		return dot(p,p);
+	}
+};
+
+class Link
+{
+	public:
+	int		index;
+	pos3D	from;
+	pos3D	to;
+	double	radius;
+
+	static  double getDistance( Link &p1, Link &p2 );
 };
 
 

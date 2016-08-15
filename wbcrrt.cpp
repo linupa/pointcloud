@@ -13,7 +13,7 @@ using namespace boost;
 using namespace jspace;
 
 extern VectorXd desired_pos;
-extern vector<Link> myLink;
+extern vector<Joint> myJoint;
 extern pthread_mutex_t	model_mutex;
 extern pthread_mutex_t	link_mutex;
 extern VectorXd getQ(const VectorXd &uq);
@@ -194,11 +194,11 @@ MatrixXd &WbcNode::getProjection(void)
 	pthread_mutex_lock(&link_mutex);
 	for ( j = 0 ; j < 10 ; j++ )
 	{
-		myLink[j].setTheta(Q[j]);
+		myJoint[j].setTheta(Q[j]);
 	}
 	for ( j = 0 ; j < 10 ; j++ )
 	{
-		coms[j] = myLink[j].getGlobal(myLink[j].com);
+		coms[j] = myJoint[j].getGlobalPos(myJoint[j].com);
 	}
 	pthread_mutex_unlock(&link_mutex);
 #endif
@@ -209,10 +209,14 @@ MatrixXd &WbcNode::getProjection(void)
 
 double WbcNode::project( Node<DOF> *_np, double step, double max ) const
 {
+	int i, j;
 	WbcNode *np;
 	VectorXd dq0;
-	VectorXd dq;
+	VectorXd dq, ndq;
 	VectorXd dst;
+	VectorXd hand = VectorXd::Zero(3);
+	hand(1) = -0.05;
+	bool updated = false;
 
 	np = (WbcNode *)_np;
 
@@ -224,12 +228,6 @@ double WbcNode::project( Node<DOF> *_np, double step, double max ) const
 //	double mag0 = dq0.norm();
 
 	dq = this->projection * dq0;
-
-	double mag = dq.norm();
-
-//	if ( mag < STEP && mag < mag0/2. )
-//		return -1.;
-
 	if ( dq0.transpose() * dq < 0)
 	{
 		cerr << "ERROR!!!: " << dq0.transpose() << ":" << dq.transpose() << endl;
@@ -237,77 +235,87 @@ double WbcNode::project( Node<DOF> *_np, double step, double max ) const
 		assert(0);
 	}
 
-	dq = dq * step / mag;
+	double mag = dq.norm();
+	ndq = dq / mag;
 
-	np->q	= this->q + dq;
+	VectorXd diff, last_diff;
+	VectorXd q = this->q;
 
-	VectorXd q = np->q;
+	// increase step until the task error exceeds
+	for ( i = 1 ; i*step <= max && i*step <= mag ; i++ )
+	{
+		bool violate_joint_limit = false;
+
+		q += step*ndq;
+
 #ifdef CHECK_LIMIT
-	for ( int i = 0 ; i < DOF ; i++ )
-	{
-#if 0
-		if ( q(i) < mins[i] ) 
-			np->q(i) = mins[i]*M_PI/180.;
-		if ( q(i) > maxs[i] )
-			np->q(i) = maxs[i]*M_PI/180.;
-#else
-		if ( (q(i) < mins[i]) || (q(i) > maxs[i]) )
+		for ( j = 0 ; j < DOF ; j++ )
 		{
-//			cerr << "FRM:    " << this.q.transpose()*180./M_PI << endl;
-//			cerr << "EXCEED: " << q.transpose() << endl;
-//			cerr << "DES:    " << dst.transpose()*180./M_PI << endl;
-			return -1.;
+			if ( (q(j) < mins[j]) || (q(j) > maxs[j]) )
+			{
+	//			cerr << "FRM:    " << this.q.transpose()*180./M_PI << endl;
+	//			cerr << "EXCEED: " << q.transpose() << endl;
+	//			cerr << "DES:    " << dst.transpose()*180./M_PI << endl;
+				violate_joint_limit = true;
+				break;
+			}
 		}
-
 #endif
+		if ( violate_joint_limit )
+			break;
+
+		VectorXd Q = getQ(q), r1;
+		pthread_mutex_lock(&link_mutex);
+		for ( int j = 0 ; j < 10 ; j++ )
+		{
+			myJoint[j].setTheta(Q(j));
+		}
+		r1 = myJoint[9].getGlobalPos(hand);
+		pthread_mutex_unlock(&link_mutex);
+
+	//	cerr << "New Node" << q.transpose()*180./M_PI << endl;
+		diff = desired_pos - r1;
+		double err = (diff.transpose() * diff)(0);
+		if ( err > (0.05*0.05) )
+		{
+
+			cerr << "New   : " << r1.transpose() << endl;
+			cerr << "DES   : " << desired_pos.transpose() << endl;
+			cerr << "Error : " << diff.transpose() << endl;
+			break;
+		}
+		else if ( err > 0.03*0.03 )
+		{
+//			VectorXd modified;
+	//		cerr << "From  : " << this.q.transpose()<<endl;
+	//		cerr << "Before: " << q.transpose()<<endl;
+//			modified = np->q + np->traction * diff;
+//			np->q = modified;
+	//		cerr << "After : " << np.q.transpose()<<endl;
+	//		np->getProjection();
+			break;
+		}
+		updated = true;
+		np->q = q;
+		last_diff = diff;
 	}
-#endif
-//	cerr << "New Node" << np->q.transpose()*180./M_PI << endl;
 
+	if ( updated == false )
+		return -1.;
+
+//	np->q	= this->q + (i-1)*step*ndq;
 	np->getProjection();
+//	np->q = np->q + np->traction * last_diff;
 
 #if 0
-	VectorXd hand = VectorXd::Zero(3);
-	hand(1) = -0.05;
-	VectorXd Q = getQ(np->q), r1;
-	pthread_mutex_lock(&link_mutex);
-	for ( int j = 0 ; j < 10 ; j++ )
-	{
-		myLink[j].setTheta(Q(j));
-	}
-	r1 = myLink[9].getGlobal(hand);
-	pthread_mutex_unlock(&link_mutex);
 #endif
 
-	cerr << r1 - np->actual << endl;
-	VectorXd diff = desired_pos - np->actual;
-	double err = (diff.transpose() * diff)(0);
+//	cerr << r1 - np->actual << endl;
 
 //	cerr << this.q.transpose() << endl;
 //	cerr << err << endl;
-	if ( err > (0.05*0.05) )
-	{
 
-		cerr << "New   : " << np->actual.transpose() << endl;
-		cerr << "Error : " << diff.transpose() << endl;
-		cerr << "DES   : " << desired_pos.transpose() << endl;
-
-		return -2.;
-	}
-#if 1
-	else if ( err > 0.01*0.01 )
-	{
-		VectorXd modified;
-//		cerr << "From  : " << this.q.transpose()<<endl;
-//		cerr << "Before: " << np.q.transpose()<<endl;
-		modified = np->q + np->traction * diff;
-		np->q = modified;
-//		cerr << "After : " << np.q.transpose()<<endl;
-//		np->getProjection();
-	}
-#endif
-
-	return mag;
+	return (i-1)*step;
 }
 
 Node<DOF> *WbcNode::copy(void) const

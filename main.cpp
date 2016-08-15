@@ -9,7 +9,6 @@
 #include <jspace/State.hpp>
 #include <jspace/test/sai_util.hpp>
 #include <jspace/pseudo_inverse.hpp>
-
 #include <boost/scoped_ptr.hpp>
 
 #include "wbcrrt.h"
@@ -47,6 +46,9 @@ static scoped_ptr<jspace::Model> model;
 static scoped_ptr<jspace::Model> model_planning;
 State body_state(9, 9, 6);
 
+vector<VectorXd> elbow_log;
+vector<VectorXd> elbow_des_log;
+vector<double>   time_log;
 //void dump_to_stdout( TiXmlNode* pParent, unsigned int indent = 0);
 void *plan(void *);
 
@@ -62,16 +64,24 @@ extern VectorXd q0;
 extern vector<VectorXd> r0;
 extern vector<VectorXd> qp1;
 extern vector<VectorXd> qp2;
+vector<double> dist;
+vector<double> distp;
+vector<double> d_t;
+vector<double> eta;
 static double dt = 0.001;
 VectorXd desired_pos;
 extern int tickCount;
-extern int seq; 
-vector<Link> myLink(10);
+extern double seq; 
+vector<Joint>	myJoint(10);
+vector<Link>	myLocalLink;
+vector<Link>	myGlobalLink;
 WbcRRT *rrt;
 PRM<9> *prm;
 extern double *value;
 extern int seq_ui;
 
+Vector sentQ;
+Vector elbow_des;
 Vector elbow0;
 Vector elbow;
 Vector error;
@@ -158,13 +168,13 @@ int main(int argc, char *argv[])
 	endeffector = VectorXd::Zero(3);;
 	q0 = q;
 
-	int i = 0;
+	int i = 0, j;
 	while ( node )
 	{
 		if ( node->name )
 			cerr << node->name << endl;
 
-		Link link;
+		Joint link;
 
 		link.com = node->com;
 		link.setRot(node->rot.block(0,0,3,1), node->rot(3));
@@ -172,24 +182,46 @@ int main(int argc, char *argv[])
 		link.axis	= 2;
 		link.mass	= node->mass;
 		if ( i > 0 )
-			link.parent = &(myLink[i-1]);
+			link.parent = &(myJoint[i-1]);
 		else
 			link.parent = NULL;
-		myLink[i] = link;
+		myJoint[i] = link;
 
 		node = node->childs;
 		i++;
 	}
 
 	r0.clear();
-	for ( int j = 0 ; j < 10 ; j++ )
+	for ( j = 0 ; j < 10 ; j++ )
 	{
-		myLink[j].setTheta(q0[j]);
+		myJoint[j].setTheta(q0[j]);
 	}
-	for ( int j = 0 ; j < 10 ; j++ )
+	for ( j = 0 ; j < 10 ; j++ )
 	{
-		r0.push_back(myLink[j].getGlobal(myLink[j].com));
+		r0.push_back(myJoint[j].getGlobalPos(myJoint[j].com));
 	}
+
+	int idxs[] = {1, 1, 2, 2, 2, 4, 6, 9};
+	double fromJoint[][3]	= { {0.,0.,0.06},    {0.,0.,-.06},    {0.,0.,0.06},   {0.,0.,-0.06},  {.2337,0.,-.06},    {0.,0.,0.},           {0.,0.,0.},     {0.,0.,0.}};
+	double toJoint[][3]		= { {0.1397,0.,0.06},{0.1397,0.,-.06},{.2337,0.,0.06},{.2337,0.,-.06},{.2337,0.,-0.18465},{0.03175,-0.27857,0.},{0.,0.27747,0.},{0.,-.1,0.}};
+
+	int numLinks = sizeof(idxs) / sizeof(int);
+	cerr << "Num Link : " << numLinks << " " << sizeof(fromJoint) << "/" << sizeof(double) << endl;
+	assert( sizeof(fromJoint) / sizeof(double) / 3 == numLinks);
+	assert( sizeof(toJoint) / sizeof(double) / 3 == numLinks);
+
+	myLocalLink.clear();
+	for ( i = 0 ; i < numLinks ; i++ )
+	{
+		Link link;
+		for ( j = 0 ; j < 3 ; j++ )
+		{
+			link.from[j] = fromJoint[i][j];
+			link.to[j] = toJoint[i][j];
+		}
+		myLocalLink.push_back(link);
+	}
+	myGlobalLink = myLocalLink;
 	
 	glutInit(&argc, argv);
 
@@ -208,7 +240,7 @@ int main(int argc, char *argv[])
 	pRecvComm = new Comm(STT_PORT, 20000);
 	pRecvComm->listen();
 
-	pCmdComm = new Comm("192.168.1.117", CMD_PORT, 20000);
+	pCmdComm = new Comm("192.168.1.110", CMD_PORT, 20000);
 
 	MyWindow win(win_width, win_height, "test");
 
@@ -337,22 +369,47 @@ void periodicTask(void)
 		pthread_mutex_lock(&link_mutex);
 		for ( j = 0 ; j < 10 ; j++ )
 		{
-			myLink[j].setTheta(q0[j]);
+			myJoint[j].setTheta(q0[j]);
 		}
-		elbow0 = myLink[5].getGlobal(VectorXd::Zero(3));
+		elbow0 = myJoint[5].getGlobalPos(VectorXd::Zero(3));
 
 		for ( j = 0 ; j < 10 ; j++ )
 		{
-			myLink[j].setTheta(q[j]);
+			myJoint[j].setTheta(q[j]);
 		}
-		elbow = myLink[5].getGlobal(VectorXd::Zero(3));
+		elbow = myJoint[5].getGlobalPos(VectorXd::Zero(3));
+
+		if ( sentQ.size() == 10 )
+		{
+//			cerr << "sentQ " << sentQ.transpose() << endl;
+			for ( j = 0 ; j < 10 ; j++ )
+			{
+				myJoint[j].setTheta(sentQ[j]);
+			}
+			elbow_des = myJoint[5].getGlobalPos(VectorXd::Zero(3));
+		}
+		else
+		{
+			elbow_des = Vector::Zero(3);
+//			cerr << "Size " << sentQ.size() << endl;
+		}
 		pthread_mutex_unlock(&link_mutex);
 
 		error = elbow - elbow0;
 
+//		if ( pushing )
+		{
+//			cerr << "Elbow Logging" << endl;
+			pthread_mutex_lock(&mutex);
+			elbow_log.push_back(elbow);
+			elbow_des_log.push_back(elbow_des);
+			time_log.push_back(tickCount);
+			pthread_mutex_unlock(&mutex);
+		}
+
 		if ( seq_ui == 0 && rrt->numNodes > 0 && bPlanning == false && pushing == false)
 		{
-			if ( error(0) > 0.03 && bPlanning == false && pushing == false)
+			if ( error(0) > 0.02 && bPlanning == false && pushing == false)
 			{
 				cerr << "====================================" << endl;
 				cerr << " Push Forward " << error(0) << endl;
@@ -361,8 +418,11 @@ void periodicTask(void)
 				dir(0) = 1;
 				push(dir);
 				pushing = true;
+				elbow_log.clear();
+				elbow_des_log.clear();
+				time_log.clear();
 			}
-			if ( error(1) < -0.03 && bPlanning == false && pushing == false)
+			if ( error(1) < -0.02 && bPlanning == false && pushing == false)
 			{
 				cerr << "====================================" << endl;
 				cerr << " Push Right " << endl;
@@ -372,8 +432,11 @@ void periodicTask(void)
 				dir(1) = -1;
 				push(dir);
 				pushing = true;
+				elbow_log.clear();
+				elbow_des_log.clear();
+				time_log.clear();
 			}
-			if ( error(2) > 0.03 && bPlanning == false && pushing == false)
+			if ( error(2) > 0.02 && bPlanning == false && pushing == false)
 			{
 				cerr << "====================================" << endl;
 				cerr << " Push Up " << error(2) << endl;
@@ -383,6 +446,9 @@ void periodicTask(void)
 				dir(2) = 1;
 				push(dir);
 				pushing = true;
+				elbow_log.clear();
+				elbow_des_log.clear();
+				time_log.clear();
 			}
 //		cerr << "PUSH " << bPlanning << " " << pushing << endl;
 		}
@@ -445,8 +511,8 @@ void periodicTask(void)
 
 		ts1.checkElapsed(4);
 
-		desired_pos(0) = 0.3;
-		desired_pos(1) = -0.1;
+		desired_pos(0) = 0.4;
+		desired_pos(1) = -0.2;
 		desired_pos(2) = 0.2;
 
 		desired_posture(5) = M_PI/2.;
@@ -526,13 +592,34 @@ void periodicTask(void)
 		}
 		count++;
 	}
+
+	pthread_mutex_lock(&link_mutex);
+	if ( qp1.size() > 2 )
+	{
+		int idx = (int)seq;
+		double ratio = seq - idx;
+		VectorXd q0, q1, Q;
+
+		if ( idx < qp1.size()-1 )
+		{
+			q0 = qp1[idx];
+			q1 = qp1[idx+1];
+
+			Q = (1.-ratio) * q0 + ratio * q1;
+		}
+		else
+			Q = qp1[idx];
+		sentQ = Q;
+	}
+	pthread_mutex_unlock(&link_mutex);
+
 	if ( bSend && qp1.size() > 2 )
 	{
 		Message msg;
 		double qa[9];
 		VectorXd qav;
 
-		qav = getQa(qp1[seq]);
+		qav = getQa(sentQ);
 		
 		for ( int i = 0 ; i < 9 ; i++ )
 		{
@@ -544,10 +631,11 @@ void periodicTask(void)
 		msg.timeStamp = 0;
 		msg.data	= (void *)qa;
 		msg.size	= sizeof(qa);
+
 			
 		pCmdComm->send(&msg);
+//		cout << "JPos: " << endl << body_state.position_ << endl;
 	}
-//	cout << "JPos: " << endl << body_state.position_ << endl;
 }
 
 #define STEP (M_PI*0.020) // Resolution 0.02PI = 3.6 deg
@@ -613,11 +701,11 @@ void *plan(void *)
 		pthread_mutex_lock(&link_mutex);
 		for ( int j = 0 ; j < 10 ; j++ )
 		{
-			myLink[j].setTheta(q[j]);
+			myJoint[j].setTheta(q[j]);
 		}
 		for ( int j = 0 ; j < 10 ; j++ )
 		{
-			r0.push_back(myLink[j].getGlobal(myLink[j].com));
+			r0.push_back(myJoint[j].getGlobalPos(myJoint[j].com));
 		}
 		pthread_mutex_unlock(&link_mutex);
 		fprintf(stderr, "Start Planning... %d,%d\n", rrt->numNodes, rrt->numEdges);
@@ -655,6 +743,7 @@ void *plan(void *)
 		pushing = false;
 
 		cerr << "Total " << rrt->numNodes << " added" << endl;
+		bRandom = false;
 
 		while (!bPlan)
 		{
@@ -667,7 +756,10 @@ void *plan(void *)
 				pthread_mutex_lock(&mutex);
 				qp1.clear();
 				qp2.clear();
+				dist.clear();
+				distp.clear();
 
+#define dD (0.01)
 				int from = 0;
 	//			int from = (int)((double)rand() * (double)rrt->numNodes / RAND_MAX);
 				int to;
@@ -702,8 +794,127 @@ void *plan(void *)
 					Q = getQ(q_plan);
 #endif
 					qp1.push_back(Q);
+					((WbcNode *)path.newNodes[i])->getProjection();
+//					cerr << getPotential(push_type, elbow0, (const WbcNode&)*(path.newNodes[i]), r0) << endl;
+
+					// Derive elbow location to get distance
+					pthread_mutex_lock(&link_mutex);
+					for ( int j = 0 ; j < 10 ; j++ )
+					{
+						myJoint[j].setTheta(Q[j]);
+					}
+					VectorXd elbow = myJoint[5].getGlobalPos(VectorXd::Zero(3));
+					VectorXd dv;
+					double dd;
+					dv = elbow - elbow0;
+					dd = dv.norm();
+					dist.push_back(dd);
+					if ( distp.size() > 0 && dd < distp.back() + dD ) 
+						distp.push_back(distp.back() + dD);
+					else
+						distp.push_back(dd);
+					pthread_mutex_unlock(&link_mutex);
 				}
+				int i;
+
+				for ( i = 0 ; i < dist.size() ; i++ )
+					cerr << dist[i] << endl;
+				cerr << endl << endl;
+				for ( i = 0 ; i < distp.size() ; i++ )
+					cerr << distp[i] << endl;
 				ts1.checkElapsed(1);
+
+				double d_max = dist.back();
+				d_t.clear();
+				d_t.resize(500);
+				eta.clear();
+				eta.resize(500);
+				for ( i = 0 ; i < 500 ; i++ )
+				{
+					double t = i * 0.01;
+					d_t[i] = d_max * ( 1. - exp(-1.5*t));
+				}
+
+				eta[0] = 0;
+				int index = 1;
+				for ( i = 1 ; i < 500 ; i++ )
+				{
+					double d = d_t[i];
+
+					while ( index < 500 && d > distp[index] )
+						index++;
+
+					eta[i] = 0.;
+					if ( index < 499 )
+					{
+						double difference = d - distp[index-1];
+						double gap = distp[index] - distp[index-1];
+						double ratio = difference / gap;
+
+						if (gap <= 0. && ( ratio >= 1 || ratio < 0 ) )
+						{
+							assert(0);
+						}
+
+						eta[i] = index + ratio - 1;
+					}
+					else
+						eta[i] = 500-1;
+						
+				}
+
+#if 1
+				cerr << "d_t" << endl;
+				for ( i = 0 ; i < 500 ; i++ )
+				{
+					int idx = (int)eta[i];
+					double ratio = eta[i] - idx;
+					double value1, value2;
+
+					if ( index < 499 )
+					{
+						value1 = (1.-ratio) * dist[idx] + ratio * dist[idx+1];
+						value2 = (1.-ratio) * distp[idx] + ratio * distp[idx+1];
+					}
+					else
+					{
+						value1 = dist[idx];
+						value2 = distp[idx];
+					}
+
+					VectorXd q0, q1, Q;
+
+					if ( idx < qp1.size()-1 )
+					{
+						q0 = qp1[idx];
+						q1 = qp1[idx+1];
+
+						Q = (1.-ratio) * q0 + ratio * q1;
+					}
+					else
+						Q = qp1[idx];
+
+					pthread_mutex_lock(&link_mutex);
+					for ( int j = 0 ; j < 10 ; j++ )
+					{
+						myJoint[j].setTheta(Q[j]);
+					}
+					VectorXd elbow = myJoint[5].getGlobalPos(VectorXd::Zero(3));
+					pthread_mutex_unlock(&link_mutex);
+
+
+					VectorXd dv;
+					double dd;
+					dv = elbow - elbow0;
+					dd = dv.norm();
+
+					cerr << eta[i] << "  " << value1 << " " << value2 << " " << dd << endl;
+				}
+#else
+				cerr << "eta" << endl;
+				for ( int i = 0 ; i < 500 ; i++ )
+					cerr << eta[i] << endl;
+#endif
 
 				cerr << "Original path " << path.numNode << " nodes" << endl;
 				for ( int i = 0 ; i < path.numNode ; i++ )
@@ -727,8 +938,9 @@ void *plan(void *)
 					double val = getPotential(0, VectorXd::Zero(3), Q, r0);
 					cerr << "(" << val << ")"; 
 #endif
+					((WbcNode *)path.nodes[i])->getProjection();
+					cerr << getPotential(push_type, elbow0, (const WbcNode&)*(path.nodes[i]), r0) << endl;
 				}
-//				cerr << endl;
 				pthread_mutex_unlock(&mutex);
 				bRandom = false;
 				ts1.checkElapsed(2);
@@ -1061,9 +1273,9 @@ double getPotential(int mode, const VectorXd &contact, const WbcNode &node, cons
 	int mask[10] = {0};
 	double value[10];
 
-	weight[5] = 10.;
-	weight[6] = 10.;
-	weight[7] = 10.;
+	weight[5] = 12.;
+	weight[6] = 12.;
+	weight[7] = 12.;
 	mask[5] = 1;
 	mask[6] = 1;
 	mask[7] = 1;
@@ -1075,11 +1287,11 @@ double getPotential(int mode, const VectorXd &contact, const WbcNode &node, cons
 	VectorXd q = getQ(node.q);
 	for ( j = 0 ; j < 10 ; j++ )
 	{
-		myLink[j].setTheta(q[j]);
+		myJoint[j].setTheta(q[j]);
 	}
 	for ( j = 0 ; j < 10 ; j++ )
 	{
-		r[j] = myLink[j].getGlobal(myLink[j].com);
+		r[j] = myJoint[j].getGlobalPos(myJoint[j].com);
 	}
 	pthread_mutex_unlock(&link_mutex);
 #endif
@@ -1094,28 +1306,28 @@ double getPotential(int mode, const VectorXd &contact, const WbcNode &node, cons
 			switch (mode)
 			{
 			case 1:
-				value[j] = weight[j] * d(0) * myLink[j].mass; // X-
+				value[j] = weight[j] * d(0) * myJoint[j].mass; // X-
 				break;
 			case 2:
-				value[j] = - weight[j] * d(1) * myLink[j].mass; // Y-
+				value[j] = - weight[j] * d(1) * myJoint[j].mass; // Y-
 				break;
 			case 3:
-				value[j] = weight[j] * d(2) * myLink[j].mass; // Z+
+				value[j] = weight[j] * d(2) * myJoint[j].mass; // Z+
 				break;
 			}
 			if ( getPotentialVerbose )
 			{
-				cerr << d.transpose() << ":" << myLink[j].mass << "(" << value[j] << ")" << endl;
+				cerr << d.transpose() << ":" << myJoint[j].mass << "(" << value[j] << ")" << endl;
 			}
 		}
 		else
 		{
-			value[j] = - sqrt(((r0[j] - node.coms[j]).transpose() * (r0[j] - node.coms[j]))(0)) * myLink[j].mass;
-//			value[j] = - sqrt(((r0[j] - r[j]).transpose() * (r0[j] - r[j]))(0)) * myLink[j].mass;
+			value[j] = - sqrt(((r0[j] - node.coms[j]).transpose() * (r0[j] - node.coms[j]))(0)) * myJoint[j].mass;
+//			value[j] = - sqrt(((r0[j] - r[j]).transpose() * (r0[j] - r[j]))(0)) * myJoint[j].mass;
 			if ( getPotentialVerbose )
 			{
-				cerr << (r0[j]-node.coms[j]).transpose() << ":" << myLink[j].mass << "(" << value[j] << ")" << endl;
-//				cerr << (r0[j]-r[j]).transpose() << ":" << myLink[j].mass << "(" << value[j] << ")" << endl;
+				cerr << (r0[j]-node.coms[j]).transpose() << ":" << myJoint[j].mass << "(" << value[j] << ")" << endl;
+//				cerr << (r0[j]-r[j]).transpose() << ":" << myJoint[j].mass << "(" << value[j] << ")" << endl;
 			}
 		}
 	}
@@ -1124,7 +1336,7 @@ double getPotential(int mode, const VectorXd &contact, const WbcNode &node, cons
 	for ( j = 0 ; j < 10 ; j++ )
 	{
 //		if ( getPotentialVerbose )
-//			cerr << value[j] << ":" << myLink[j].mass << " ";
+//			cerr << value[j] << ":" << myJoint[j].mass << " ";
 		sum += value[j];
 	}
 //	if ( getPotentialVerbose )

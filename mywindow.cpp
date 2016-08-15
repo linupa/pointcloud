@@ -16,7 +16,7 @@
 #include <FL/Fl_Value_Slider.H>
 
 #include "mywindow.h"
-#include "xml.h"
+//#include "xml.h"
 #include "kin.h"
 #include "prm.hpp"
 
@@ -43,6 +43,9 @@ extern bool gShowBase;
 bool bPath = true;
 extern bool bRandom;
 extern int goalIdx;
+extern vector<VectorXd> elbow_log;
+extern vector<VectorXd> elbow_des_log;
+extern vector<double>   time_log;
 extern int trackingGroupIndex;
 extern int trackingGroupId;
 extern double trackPos[3];
@@ -55,6 +58,7 @@ vector<VectorXd> r0;
 
 vector<VectorXd> qp1;
 vector<VectorXd> qp2;
+extern vector<double> eta;
 int		control = 1.;
 double speed = 0.;
 
@@ -62,18 +66,21 @@ extern bool bSimul;
 extern bool bPlan;
 extern bool bPlanning;
 extern bool bSend;
-extern XmlNode baseNode;
+//extern XmlNode baseNode;
 extern void periodicTask(void);
 extern pthread_mutex_t	mutex;
 extern pthread_mutex_t	link_mutex;
 extern bool pushing;
 
+// Updated in draw every 30msec
+// Reset when pushed
+#define TICK_SEC (33)
 int tickCount = 0;
-int seq; 
+double seq; 
 int seq_ui = 0;
 int node_id = 0;
 
-extern vector<Link> myLink;
+extern vector<Joint> myJoint;
 //extern WbcRRT *rrt;
 extern PRM<9> *prm;
 double *value;
@@ -351,24 +358,68 @@ extern double	min_pos[2], max_pos[2];
 		{0.5,1., 0.5},
 		{0.5,1., 0.5}
 	};
+	int idxs[] = {1, 1, 2, 2, 2, 4, 6, 9};
+	int dirs[] = {1, 1, 1, 1, 3, 2, 2, 1};
+	double fromJoint[][3]	= { 
+		{0.,0.,0.06},    
+		{0.,0.,-.06},    
+		{0.,0.,0.06},   
+		{0.,0.,-0.06},  
+		{.2337,0.,-0.18465},
+		{0.03175,-0.27857,0.},
+		{0.,0.,0.},     
+		{0.,-.1,0.}
+	};
+	double toJoint[][3]		= { 
+		{0.1397,0.,0.06},
+		{0.1397,0.,-.06},
+		{.2337,0.,0.06},
+		{.2337,0.,-.06},
+		{.2337,0.,-.06},    
+		{0.,0.,0.},           
+		{0.,0.27747,0.},
+		{0.,0.,0.}
+	};
 
 	int index = 0;
 //	XmlNode *pNode = &baseNode;
-	XmlNode *pNode = baseNode.childs;
+//	XmlNode *pNode = baseNode.childs;
+
+	// Display Limbs with Cylinders of the Current State
+#if 0
 	glPushMatrix();
 	do {
 		glColor3f(color[index][0], color[index][1], color[index][2]);
 
 		glLineWidth(3.0);
+
+#if 0
 		glBegin(GL_LINES);
 		glVertex3f(0., 0., 0.);
 		glVertex3f(pNode->pos(0), pNode->pos(1), 0.);
-		glEnd();
-
-		glBegin(GL_LINES);
-		glVertex3f(pNode->pos(0), pNode->pos(1), 0.);
 		glVertex3f(pNode->pos(0), pNode->pos(1), pNode->pos(2));
 		glEnd();
+#else
+		GLUquadricObj *quadratic;
+
+		quadratic = gluNewQuadric();
+		glPushMatrix();
+		glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
+		gluCylinder(quadratic,0.05f,0.05f,pNode->pos(1),32,32);
+		glPopMatrix();
+
+		quadratic = gluNewQuadric();
+		glPushMatrix();
+		glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
+		gluCylinder(quadratic,0.05f,0.05f,pNode->pos(0),32,32);
+		glPopMatrix();
+
+		quadratic = gluNewQuadric();
+		glPushMatrix();
+		glRotatef(-90.0f, 0.0f, 0.0f, 1.0f);
+		gluCylinder(quadratic,0.05f,0.05f,pNode->pos(2),32,32);
+		glPopMatrix();
+#endif
 
 		glLineWidth(1.0);
 		glTranslatef(pNode->pos(0), pNode->pos(1), pNode->pos(2));
@@ -381,15 +432,95 @@ extern double	min_pos[2], max_pos[2];
 		glutSolidSphere(0.025,20,20);
 		glPopMatrix();
 #endif
-//		myLink[index].theta = q[index];
+//		myJoint[index].theta = q[index];
 		index ++;
 
-//		Link link1;
+//		Joint link1;
 //		link1.setRot(pNode->rot.block(0,0,3,1), pNode->rot(3));
 	}
 	while (pNode = pNode->childs);
 	glPopMatrix();
+#endif
 
+	VectorXd r0 = VectorXd::Zero(3);
+	VectorXd prev = VectorXd::Zero(3);
+	VectorXd next = VectorXd::Zero(3);
+	MatrixXd rot;
+	double mat[16] = {0.};
+
+	// Draw Skeleton of the Current State
+	pthread_mutex_lock(&link_mutex);
+	for ( i = 0 ; i < 10 ; i++ )
+		myJoint[i].setTheta(q(i));
+	for ( i = 0 ; i < 8 ; i++ )
+	{
+		prev(0) = fromJoint[i][0];
+		prev(1) = fromJoint[i][1];
+		prev(2) = fromJoint[i][2];
+		next(0) = toJoint[i][0];
+		next(1) = toJoint[i][1];
+		next(2) = toJoint[i][2];
+		VectorXd r0 = myJoint[idxs[i]].getGlobalPos(prev);
+		VectorXd r  = myJoint[idxs[i]].getGlobalPos(next);
+
+		double mat[16];
+
+		myJoint[idxs[i]].getGlobalOri(mat);
+#if 0
+		glBegin(GL_LINES);
+		glVertex3f(r(0), r(1), r(2));
+		glVertex3f(r0(0), r0(1), r0(2));
+		glEnd();
+#else
+		GLUquadricObj *quadratic;
+		quadratic = gluNewQuadric();
+		glPushMatrix();
+		glTranslatef(r0(0), r0(1), r0(2));
+		glMultMatrixd(mat);
+		double _dir[3] = {0.};
+		double length, deg;
+		switch ( dirs[i] )
+		{
+			case 1:
+				_dir[1] = 1.;
+				length = fabs(fromJoint[i][0] - toJoint[i][0]);
+				glColor3f(1., 0., 0.);
+				deg = 90.;
+				break;
+			case 2:
+				_dir[0] = -1.;
+				length = fabs(fromJoint[i][1] - toJoint[i][1]);
+				glColor3f(0., 1., 0.);
+				deg = 90.;
+				break;
+			case 3:
+				length = fabs(fromJoint[i][2] - toJoint[i][2]);
+				glColor3f(1., 1., 0.);
+				deg = 0.;
+				break;
+		}
+		glRotatef(deg, _dir[0], _dir[1], _dir[2] );
+		gluCylinder(quadratic,0.01f,0.01f,length,32,32);
+		glPopMatrix();
+#endif
+
+		r0 = r;
+	}
+//	rot = myJoint[8].getGlobalOri();
+	myJoint[8].getGlobalOri(mat);
+
+	pthread_mutex_unlock(&link_mutex);
+
+	glColor3f(1.0, 0.0, 0.0);
+	VectorXd unit = VectorXd::Zero(3);
+	unit(0) = 1.;
+
+	GLUquadricObj *quadratic;
+	quadratic = gluNewQuadric();
+	glPushMatrix();
+	glMultMatrixd(mat);
+	gluCylinder(quadratic,0.05f,0.05f,0.3,32,32);
+	glPopMatrix();
 
 	pthread_mutex_lock(&mutex);
 	tickCount++;
@@ -406,22 +537,57 @@ extern double	min_pos[2], max_pos[2];
 		glColor3f(0.8, 0.8, 0.8);
 	}
 
-	if ( qp->size() > 0 )
+//	if ( (tickCount % 33) == 0)
+//		cerr << "tickCount " << tickCount;
+
+	if ( qp->size() > 0 && eta.size() > 0 )
 	{
+		double sec = (double)tickCount * 0.03;
+		static int dest = 0;
 //		seq	= (tickCount/2 ) % (3*qp->size()-1);
-		if ( tickCount/2  > (3*qp->size()-1) )
+//		cerr << "sec: " << sec << endl;
+		if ( sec >= 20. )
 		{
-			seq = 0;
+			seq = 0.;
 			pushing = false;
 		}
-		else 
-			seq	= (tickCount/2 ) % (3*qp->size()-1);
-		if ( seq >= 2 * qp->size() )
-			seq = 3*qp->size() - 1 - seq;
-		else if ( seq >= qp->size() )
-			seq = qp->size()-1;
+		else if ( sec >= 10. )
+		{
+			seq	= (20. - sec ) / 10. * dest;
+			
+		}
+		else if ( sec < 5. )
+		{
+			int idx = (int)(sec*100.);
+			assert(idx < 500 );
+			seq = eta[idx];
+			dest = (int)seq;
 
-		assert( seq < qp->size());
+			if ( elbow_log.size() > 0 )
+			{
+				if (elbow_log.size() != elbow_des_log.size())
+				{
+					cerr << elbow_log.size() << "!=" <<  elbow_des_log.size() << endl;
+					assert(0);
+				}
+				for ( int i = 0  ; i < elbow_log.size() ; i++ )
+				{
+					Vector elbow = elbow_log[i];
+					Vector elbow_des = elbow_des_log[i];
+
+					double err = (elbow - elbow0).norm();
+					cerr << time_log[i] << " " << seq << " " << elbow[0] << " " << elbow[1] << " " << elbow[2] << " " << err << "  ";
+
+					err = (elbow_des - elbow0).norm();
+					cerr << elbow_des[0] << " " << elbow_des[1] << " " << elbow_des[2] << " " << err << endl;
+					time_log.clear();
+					elbow_log.clear();
+					elbow_des_log.clear();
+				}
+			}
+		}
+
+		assert( seq >= 0 && seq <= qp->size() - 1);
 	}
 	else
 		pushing = false;
@@ -434,15 +600,31 @@ extern double	min_pos[2], max_pos[2];
 
 
 	if ( qp->size() )
-		Q = (*qp)[seq];
+	{
+		int idx = (int)seq;
+		double ratio = seq - idx;
+		VectorXd q0, q1;
+
+		if ( idx < qp->size()-1 )
+		{
+			q0 = (*qp)[idx];
+			q1 = (*qp)[idx+1];
+
+			Q = (1.-ratio) * q0 + ratio * q1;
+		}
+		else
+			Q = (*qp)[idx];
+	}
 	if ( prm->numNodes > 0 && node_id > 0 )
 		Q = getQ(prm->nodes[node_id-1]->q);
 
 	pthread_mutex_unlock(&mutex);
 
 //	for ( ; it != qp->end() ; it++ )
+	if ( qp->size() > 0 )
 	{
 //		cerr << seq << " / " << qp->size() << endl;
+#if 0
 		index = 0;
 		pNode = baseNode.childs;
 		glPushMatrix();
@@ -472,14 +654,42 @@ extern double	min_pos[2], max_pos[2];
 		}
 		while (pNode = pNode->childs);
 		glPopMatrix();
+#endif
+
+
+		// Draw Skeleton of Plan
+		pthread_mutex_lock(&link_mutex);
+		for ( i = 0 ; i < 10 ; i++ )
+			myJoint[i].setTheta(Q(i));
+		for ( i = 0 ; i < 8 ; i++ )
+		{
+			prev(0) = fromJoint[i][0];
+			prev(1) = fromJoint[i][1];
+			prev(2) = fromJoint[i][2];
+			next(0) = toJoint[i][0];
+			next(1) = toJoint[i][1];
+			next(2) = toJoint[i][2];
+			VectorXd r0 = myJoint[idxs[i]].getGlobalPos(prev);
+			VectorXd r  = myJoint[idxs[i]].getGlobalPos(next);
+			glBegin(GL_LINES);
+			glVertex3f(r(0), r(1), r(2));
+			glVertex3f(r0(0), r0(1), r0(2));
+			glEnd();
+
+			r0 = r;
+		}
+		pthread_mutex_unlock(&link_mutex);
+
+
+		// Draw Sphere on CoM of Each Limb
 #if 1
-	//	VectorXd r = myLink[5].getGlobal(myLink[5].com);
+	//	VectorXd r = myJoint[5].getGlobalPos(myJoint[5].com);
 		VectorXd r, r1;
 		pthread_mutex_lock(&link_mutex);
 		for ( i = 0 ; i < 10 ; i++ )
 		{
-			myLink[i].setTheta(Q(i));
-			r = myLink[i].getGlobal(myLink[i].com);
+			myJoint[i].setTheta(Q(i));
+			r = myJoint[i].getGlobalPos(myJoint[i].com);
 			glPushMatrix();
 			glColor3f(1.0, 1.0, 1.0);
 			glTranslatef(r(0), r(1), r(2));
@@ -487,18 +697,20 @@ extern double	min_pos[2], max_pos[2];
 			glPopMatrix();
 		}
 
-		r = myLink[5].getGlobal(VectorXd::Zero(3));
+		r = myJoint[5].getGlobalPos(VectorXd::Zero(3));
 		VectorXd hand = VectorXd::Zero(3);
 		hand(1) = -0.05;
-		r1 = myLink[9].getGlobal(hand);
+		r1 = myJoint[9].getGlobalPos(hand);
 		pthread_mutex_unlock(&link_mutex);
 
+		// Elbow
 		glPushMatrix();
 		glColor3f(1.0, 0.0, 0.0);
 		glTranslatef(r(0), r(1), r(2));
 		glutSolidSphere(0.040,20,20);
 		glPopMatrix();
 
+		// End Effector
 		glPushMatrix();
 		glColor3f(0.0, 0.0, 1.0);
 		glTranslatef(r1(0), r1(1), r1(2));
@@ -542,7 +754,6 @@ extern double	min_pos[2], max_pos[2];
 //	fprintf(stderr, "%f %f %f %f %f %f\n", torque[0], torque[1], torque[2], force[0], force[1], force[2]); 
 	// Draw Human Posture
 
-
 #if 0
 	for ( i = 0 ; i < 3 ; i++ )
 	{
@@ -563,6 +774,7 @@ extern double	min_pos[2], max_pos[2];
 
 	glLineWidth(1.0);
 
+	// Floor 
 	glPushMatrix();
 	glRotatef(phi*180./M_PI, 0., 0., 1.);
 	double h = -0.5;
@@ -642,7 +854,7 @@ MyWindow(int width, int height, const char * title)
 
 	mSliceSlider = new Fl_Value_Slider( 10, height - 30, width / 4 - 100, 30, "");
 	mSliceSlider->type(FL_HORIZONTAL);
-	mSliceSlider->bounds(1., 10.);
+	mSliceSlider->bounds(0., 9.);
 	mSliceSlider->callback(cb_control, this);
 	mSliceSlider->step(1.);
 	mSliceSlider->value(1.);
@@ -711,6 +923,9 @@ resize(int x, int y, int w, int h)
 
 }
 
+extern Vector Mins;
+extern Vector Maxs;
+
 void MyWindow::
 timer_cb(void * param)
 {
@@ -726,8 +941,20 @@ timer_cb(void * param)
 //	if ( !paused )
 
 	if ( !bSimul )
+	{
 		q[control] += speed;
-	q[2] = q[1];
+		int joint = control;
+
+		if ( joint > 1)
+			joint--;
+
+		if ( q[control] > Maxs[joint] )
+			q[control] = Maxs[joint];
+		else if ( q[control] < Mins[joint] )
+			q[control] = Mins[joint];
+
+		q[2] = q[1];
+	}
 
 	periodicTask();
 
@@ -863,9 +1090,9 @@ cb_seq(Fl_Widget *widget, void *param)
 {
 	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
 	seq_ui = (int)pSlider->value();
-	int seq = seq_ui - 1;
+	int seq_no = seq_ui - 1;
 
-	if ( seq >= 0 )
+	if ( seq_no >= 0 )
 	{
 		VectorXd contact	= elbow0;
 
@@ -875,7 +1102,7 @@ cb_seq(Fl_Widget *widget, void *param)
 			qp = &qp1;
 		else
 			qp = &qp2;
-		VectorXd Q = (*qp)[seq]; 
+		VectorXd Q = (*qp)[seq_no]; 
 		pthread_mutex_unlock(&mutex);
 
 		WbcNode node;
@@ -886,7 +1113,7 @@ cb_seq(Fl_Widget *widget, void *param)
 		getPotentialVerbose = true;
 		double val = getPotential(pushType, contact, node, r0);
 
-		cerr << seq << ": " << val << ":" << Q.transpose() * 180. / M_PI << endl;
+		cerr << seq_no << ": " << val << ":" << Q.transpose() * 180. / M_PI << endl;
 	}
 	getPotentialVerbose = false;
 }
