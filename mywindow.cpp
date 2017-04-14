@@ -19,6 +19,7 @@
 //#include "xml.h"
 #include "kin.h"
 #include "prm.hpp"
+#include "model.h"
 
 using Eigen::MatrixXd;
 
@@ -26,6 +27,7 @@ using Eigen::MatrixXd;
 #define CLICK_THRESHOLD 3
 
 
+extern KinModel myModel;
 double target_pos[2];
 int point_pressed = -1;
 int drawing;
@@ -80,7 +82,8 @@ double seq;
 int seq_ui = 0;
 int node_id = 0;
 
-extern vector<Joint> myJoint;
+extern vector<Link>	myLocalLink;
+extern vector<Link>	myGlobalLink;
 //extern WbcRRT *rrt;
 extern PRM<9> *prm;
 double *value;
@@ -268,6 +271,134 @@ void drawBlock(float width, float height)
 	glEnd();
 }
 
+void drawCapsule(double *pos1, double *pos2, double radius)
+{
+	double diff[3];
+	double axis[3];
+	GLUquadricObj *quadratic;
+	quadratic = gluNewQuadric();
+
+	diff[0] = pos2[0] - pos1[0];
+	diff[1] = pos2[1] - pos1[1];
+	diff[2] = pos2[2] - pos1[2];
+
+	axis[0] = - diff[1] * 1.;
+	axis[1] = 1. * diff[0];
+	axis[2] = 0.;
+
+	double length = sqrt(diff[0]*diff[0] + diff[1]*diff[1] + diff[2]*diff[2]);
+	double costh =  diff[2] / length;
+	double th;
+	
+	if ( costh > -0.9999 )
+		th = acos(costh);
+	else
+	{
+		th = M_PI;
+		axis[0] = 1.;
+		axis[1] = 0.;
+		axis[2] = 0.;
+	}
+
+	glPushMatrix();
+	glTranslatef(pos1[0], pos1[1], pos1[2]);
+	glRotatef(th * 180. / M_PI , axis[0], axis[1], axis[2] );
+	gluCylinder(quadratic, radius, radius, length, 32, 32);
+	glutSolidSphere(radius, 32, 32);
+	glTranslatef(0., 0., length);
+	double plane[] = {1., 0., 0., 1.};
+	glClipPlane(GL_CLIP_PLANE0, plane);
+	glutSolidSphere(radius, 32, 32);
+	glPopMatrix();
+}
+
+void drawCapsule(const VectorXd &from, const VectorXd &to, double radius)
+{
+	double _from[3];
+	double _to[3];
+
+	for ( int i = 0 ; i < 3 ; i++ )
+	{
+		_from[i] = from[i];
+		_to[i] = to[i];
+	}
+
+	drawCapsule( _from, _to, radius );
+}
+
+
+void drawCylinder(double *pos1, double *pos2, double radius)
+{
+	double diff[3];
+	double axis[3];
+	GLUquadricObj *quadratic;
+	quadratic = gluNewQuadric();
+
+	diff[0] = pos2[0] - pos1[0];
+	diff[1] = pos2[1] - pos1[1];
+	diff[2] = pos2[2] - pos1[2];
+
+	axis[0] = - diff[1] * 1.;
+	axis[1] = 1. * diff[0];
+	axis[2] = 0.;
+
+	double length = sqrt(diff[0]*diff[0] + diff[1]*diff[1] + diff[2]*diff[2]);
+	double costh =  diff[2] / length;
+	double th;
+	
+	if ( costh > -0.9999 )
+		th = acos(costh);
+	else
+	{
+		th = M_PI;
+		axis[0] = 1.;
+		axis[1] = 0.;
+		axis[2] = 0.;
+	}
+
+	glPushMatrix();
+	glTranslatef(pos1[0], pos1[1], pos1[2]);
+	glRotatef(th * 180. / M_PI , axis[0], axis[1], axis[2] );
+	gluCylinder(quadratic, radius, radius, length, 32, 32);
+	glPopMatrix();
+}
+
+void drawCylinder(const VectorXd &from, const VectorXd &to, double radius)
+{
+	double _from[3];
+	double _to[3];
+
+	for ( int i = 0 ; i < 3 ; i++ )
+	{
+		_from[i] = from[i];
+		_to[i] = to[i];
+	}
+
+	drawCylinder( _from, _to, radius );
+}
+
+
+void drawSphere(const double *pos, double radius, int numPoly)
+{
+	glPushMatrix();
+	glTranslatef(pos[0], pos[1], pos[2]);
+	glutSolidSphere(radius, numPoly, numPoly);
+	glPopMatrix();
+}
+
+void drawSphere(const VectorXd  &pos, double radius, int numPoly)
+{
+	double _pos[3];
+
+	for ( int i = 0 ; i < 3 ; i++ )
+	{
+		_pos[i] = pos[i];
+	}
+
+	drawSphere(_pos, radius, numPoly);
+}
+
+
 
 
 extern double _center;
@@ -358,28 +489,6 @@ extern double	min_pos[2], max_pos[2];
 		{0.5,1., 0.5},
 		{0.5,1., 0.5}
 	};
-	int idxs[] = {1, 1, 2, 2, 2, 4, 6, 9};
-	int dirs[] = {1, 1, 1, 1, 3, 2, 2, 1};
-	double fromJoint[][3]	= { 
-		{0.,0.,0.06},    
-		{0.,0.,-.06},    
-		{0.,0.,0.06},   
-		{0.,0.,-0.06},  
-		{.2337,0.,-0.18465},
-		{0.03175,-0.27857,0.},
-		{0.,0.,0.},     
-		{0.,-.1,0.}
-	};
-	double toJoint[][3]		= { 
-		{0.1397,0.,0.06},
-		{0.1397,0.,-.06},
-		{.2337,0.,0.06},
-		{.2337,0.,-.06},
-		{.2337,0.,-.06},    
-		{0.,0.,0.},           
-		{0.,0.27747,0.},
-		{0.,0.,0.}
-	};
 
 	int index = 0;
 //	XmlNode *pNode = &baseNode;
@@ -432,7 +541,7 @@ extern double	min_pos[2], max_pos[2];
 		glutSolidSphere(0.025,20,20);
 		glPopMatrix();
 #endif
-//		myJoint[index].theta = q[index];
+//		myModel.joints[index].theta = q[index];
 		index ++;
 
 //		Joint link1;
@@ -443,84 +552,57 @@ extern double	min_pos[2], max_pos[2];
 #endif
 
 	VectorXd r0 = VectorXd::Zero(3);
-	VectorXd prev = VectorXd::Zero(3);
-	VectorXd next = VectorXd::Zero(3);
-	MatrixXd rot;
 	double mat[16] = {0.};
 
 	// Draw Skeleton of the Current State
 	pthread_mutex_lock(&link_mutex);
-	for ( i = 0 ; i < 10 ; i++ )
-		myJoint[i].setTheta(q(i));
-	for ( i = 0 ; i < 8 ; i++ )
+	myModel.updateState(q);
+	for ( i = 0 ; i < myModel.numLinks ; i++ )
 	{
-		prev(0) = fromJoint[i][0];
-		prev(1) = fromJoint[i][1];
-		prev(2) = fromJoint[i][2];
-		next(0) = toJoint[i][0];
-		next(1) = toJoint[i][1];
-		next(2) = toJoint[i][2];
-		VectorXd r0 = myJoint[idxs[i]].getGlobalPos(prev);
-		VectorXd r  = myJoint[idxs[i]].getGlobalPos(next);
+//		Link  link = myLocalLink[i];
+		Link	link = myModel.localLinks[i];
 
-		double mat[16];
+		VectorXd r0	= myModel.joints[link.index].getGlobalPos(link.from);
+		VectorXd r	= myModel.joints[link.index].getGlobalPos(link.to);
+//		myModel.joints[link.index].getGlobalOri(mat);
 
-		myJoint[idxs[i]].getGlobalOri(mat);
 #if 0
 		glBegin(GL_LINES);
 		glVertex3f(r(0), r(1), r(2));
 		glVertex3f(r0(0), r0(1), r0(2));
 		glEnd();
 #else
+#if 0
 		GLUquadricObj *quadratic;
 		quadratic = gluNewQuadric();
 		glPushMatrix();
 		glTranslatef(r0(0), r0(1), r0(2));
 		glMultMatrixd(mat);
 		double _dir[3] = {0.};
-		double length, deg;
+		glColor3f(0., 1., 0.);
 		switch ( dirs[i] )
 		{
 			case 1:
 				_dir[1] = 1.;
-				length = fabs(fromJoint[i][0] - toJoint[i][0]);
-				glColor3f(1., 0., 0.);
-				deg = 90.;
 				break;
 			case 2:
 				_dir[0] = -1.;
-				length = fabs(fromJoint[i][1] - toJoint[i][1]);
-				glColor3f(0., 1., 0.);
-				deg = 90.;
-				break;
-			case 3:
-				length = fabs(fromJoint[i][2] - toJoint[i][2]);
-				glColor3f(1., 1., 0.);
-				deg = 0.;
 				break;
 		}
-		glRotatef(deg, _dir[0], _dir[1], _dir[2] );
-		gluCylinder(quadratic,0.01f,0.01f,length,32,32);
+		glRotatef(90., _dir[0], _dir[1], _dir[2] );
+		gluCylinder(quadratic, link.radius, link.radius, link.length,32,32);
 		glPopMatrix();
+#else
+
+		drawCapsule(r0, r, link.radius);
 #endif
-
-		r0 = r;
+#endif
 	}
-//	rot = myJoint[8].getGlobalOri();
-	myJoint[8].getGlobalOri(mat);
-
 	pthread_mutex_unlock(&link_mutex);
 
 	glColor3f(1.0, 0.0, 0.0);
 	VectorXd unit = VectorXd::Zero(3);
 	unit(0) = 1.;
-
-	GLUquadricObj *quadratic;
-	quadratic = gluNewQuadric();
-	glPushMatrix();
-	glMultMatrixd(mat);
-	gluCylinder(quadratic,0.05f,0.05f,0.3,32,32);
-	glPopMatrix();
 
 	pthread_mutex_lock(&mutex);
 	tickCount++;
@@ -587,7 +669,12 @@ extern double	min_pos[2], max_pos[2];
 			}
 		}
 
-		assert( seq >= 0 && seq <= qp->size() - 1);
+		if ( !( seq >= 0 && seq <= qp->size() - 1) )
+		{
+			cerr << seq << " " << qp->size() << endl;
+			assert(0);
+		}
+//		assert( seq >= 0 && seq <= qp->size() - 1);
 	}
 	else
 		pushing = false;
@@ -656,21 +743,14 @@ extern double	min_pos[2], max_pos[2];
 		glPopMatrix();
 #endif
 
-
 		// Draw Skeleton of Plan
 		pthread_mutex_lock(&link_mutex);
-		for ( i = 0 ; i < 10 ; i++ )
-			myJoint[i].setTheta(Q(i));
+		myModel.updateState(Q);
 		for ( i = 0 ; i < 8 ; i++ )
 		{
-			prev(0) = fromJoint[i][0];
-			prev(1) = fromJoint[i][1];
-			prev(2) = fromJoint[i][2];
-			next(0) = toJoint[i][0];
-			next(1) = toJoint[i][1];
-			next(2) = toJoint[i][2];
-			VectorXd r0 = myJoint[idxs[i]].getGlobalPos(prev);
-			VectorXd r  = myJoint[idxs[i]].getGlobalPos(next);
+			Link link = myLocalLink[i];
+			VectorXd r0	= myModel.joints[link.index].getGlobalPos(link.from);
+			VectorXd r	= myModel.joints[link.index].getGlobalPos(link.to);
 			glBegin(GL_LINES);
 			glVertex3f(r(0), r(1), r(2));
 			glVertex3f(r0(0), r0(1), r0(2));
@@ -683,13 +763,12 @@ extern double	min_pos[2], max_pos[2];
 
 		// Draw Sphere on CoM of Each Limb
 #if 1
-	//	VectorXd r = myJoint[5].getGlobalPos(myJoint[5].com);
 		VectorXd r, r1;
 		pthread_mutex_lock(&link_mutex);
+		myModel.updateState(Q);
 		for ( i = 0 ; i < 10 ; i++ )
 		{
-			myJoint[i].setTheta(Q(i));
-			r = myJoint[i].getGlobalPos(myJoint[i].com);
+			r = myModel.joints[i].getGlobalPos(myModel.joints[i].com);
 			glPushMatrix();
 			glColor3f(1.0, 1.0, 1.0);
 			glTranslatef(r(0), r(1), r(2));
@@ -697,10 +776,10 @@ extern double	min_pos[2], max_pos[2];
 			glPopMatrix();
 		}
 
-		r = myJoint[5].getGlobalPos(VectorXd::Zero(3));
+		r = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
 		VectorXd hand = VectorXd::Zero(3);
 		hand(1) = -0.05;
-		r1 = myJoint[9].getGlobalPos(hand);
+		r1 = myModel.joints[9].getGlobalPos(hand);
 		pthread_mutex_unlock(&link_mutex);
 
 		// Elbow
@@ -1105,6 +1184,7 @@ cb_seq(Fl_Widget *widget, void *param)
 		VectorXd Q = (*qp)[seq_no]; 
 		pthread_mutex_unlock(&mutex);
 
+#if 1
 		WbcNode node;
 
 		node.q = getQa(Q);
@@ -1114,6 +1194,7 @@ cb_seq(Fl_Widget *widget, void *param)
 		double val = getPotential(pushType, contact, node, r0);
 
 		cerr << seq_no << ": " << val << ":" << Q.transpose() * 180. / M_PI << endl;
+#endif
 	}
 	getPotentialVerbose = false;
 }

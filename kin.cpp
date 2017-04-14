@@ -92,6 +92,17 @@ VectorXd Joint::getGlobalPos(const VectorXd &local)
 	return ret;
 }
 
+VectorXd Joint::getGlobalPos(const pos3D &local)
+{
+	VectorXd	_local(3);
+
+	_local(0) = local.get(0);
+	_local(1) = local.get(1);
+	_local(2) = local.get(2);
+
+	return getGlobalPos(_local);
+}
+
 MatrixXd Joint::getGlobalOri( void )
 {
 	MatrixXd	ret;
@@ -136,7 +147,7 @@ void Joint::setRot(VectorXd axis0, double rad)
 	int			zero;
 	double		x, y, z;
 
-	cerr << axis0.transpose() << endl;
+//	cerr << axis0.transpose() << endl;
 	Q = T = MatrixXd::Zero(3,3);
 	Q.block(0,0,3,1) = axis0;
 	axis1 = axis2 = VectorXd::Zero(3);
@@ -144,7 +155,7 @@ void Joint::setRot(VectorXd axis0, double rad)
 	y = axis0(1);
 	z = axis0(2);
 
-	cerr << axis0 << endl;
+//	cerr << axis0 << endl;
 	absAxis = axis0.transpose() * axis0.asDiagonal();
 
 	if ( absAxis(0) >= absAxis(1) && absAxis(0) >= absAxis(2) )
@@ -214,7 +225,7 @@ void Joint::setRot(VectorXd axis0, double rad)
 		zero = 2;
 	}
 
-	cerr << ((one<<2) | zero) << endl;
+//	cerr << ((one<<2) | zero) << endl;
 	switch ((one<<2) | zero)
 	{
 		case ( (0<<2) | 1 ):
@@ -265,7 +276,7 @@ void Joint::setRot(VectorXd axis0, double rad)
 		Q.block(0,1,3,1) = axis2;
 		Q.block(0,2,3,1) = axis1;
 	}
-	cerr << Q << " " << det << endl;
+//	cerr << Q << " " << det << endl;
 
 	T(0,0) = 1.;
 	T(1,1) = cos(rad);
@@ -280,9 +291,9 @@ void Joint::setRot(VectorXd axis0, double rad)
 
 	rot = Q * T * Q.transpose();
 
-	cerr << rot << endl;
+//	cerr << rot << endl;
 
-	cerr << "done" << endl;
+//	cerr << "done" << endl;
 
 
 }

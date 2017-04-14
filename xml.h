@@ -19,8 +19,24 @@ public:
 	double		mass;
 
 	XmlNode(void);
-//	vector<XmlNode*> childs;
-	XmlNode *childs;
+	XmlNode* sibling;
+	XmlNode *child;
+
+	void parseXML(const TiXmlNode *parent);
+};
+
+class XmlLinkNode
+{
+public:
+	char name[20];
+	VectorXd	from;
+	VectorXd	to;
+	int			index;
+	double		radius;
+	double		length;
+
+	XmlLinkNode(void);
+	vector<XmlLinkNode *> linkList;
 
 	void parseXML(const TiXmlNode *parent);
 };

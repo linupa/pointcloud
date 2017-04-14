@@ -6,6 +6,7 @@
 #include <boost/scoped_ptr.hpp>
 
 #include "wbcrrt.h"
+#include "model.h"
 #define CHECK_LIMIT
 
 using namespace std;
@@ -13,13 +14,17 @@ using namespace boost;
 using namespace jspace;
 
 extern VectorXd desired_pos;
-extern vector<Joint> myJoint;
 extern pthread_mutex_t	model_mutex;
 extern pthread_mutex_t	link_mutex;
 extern VectorXd getQ(const VectorXd &uq);
+extern KinModel myModel;
 
 scoped_ptr<jspace::Model> WbcNode::model;
-WbcNode::WbcNode(void) 
+
+VectorXd WbcNode::mins(DOF);
+VectorXd WbcNode::maxs(DOF);
+
+WbcNode::WbcNode(void) : Node<DOF>(mins, maxs)
 {
 	dim = DOF;
 	q = VectorXd::Zero(dim);
@@ -28,6 +33,7 @@ WbcNode::WbcNode(void)
 	depth	= 0;
 }
 
+#if 0
 WbcNode::WbcNode(const double min, const double max) : Node<DOF>(min,max)
 {
 	int i;
@@ -40,6 +46,7 @@ WbcNode::WbcNode(const double min, const double max) : Node<DOF>(min,max)
 	parent	= NULL;
 	depth	= 0;
 }
+#endif
 
 WbcNode::WbcNode(const VectorXd& min, const VectorXd& max) : Node<DOF>(min,max)
 {
@@ -48,7 +55,7 @@ WbcNode::WbcNode(const VectorXd& min, const VectorXd& max) : Node<DOF>(min,max)
 	projection = MatrixXd::Identity(dim,dim);
 }
 
-WbcNode::WbcNode(const WbcNode &src) 
+WbcNode::WbcNode(const WbcNode &src) : Node<DOF>(src) 
 {
 	q		= src.q;
 	projection	= src.projection;
@@ -192,13 +199,10 @@ MatrixXd &WbcNode::getProjection(void)
 	int j;
 	VectorXd		Q = getQ(q);
 	pthread_mutex_lock(&link_mutex);
+	myModel.updateState(Q);
 	for ( j = 0 ; j < 10 ; j++ )
 	{
-		myJoint[j].setTheta(Q[j]);
-	}
-	for ( j = 0 ; j < 10 ; j++ )
-	{
-		coms[j] = myJoint[j].getGlobalPos(myJoint[j].com);
+		coms[j] = myModel.joints[j].getGlobalPos(myModel.joints[j].com);
 	}
 	pthread_mutex_unlock(&link_mutex);
 #endif
@@ -253,9 +257,13 @@ double WbcNode::project( Node<DOF> *_np, double step, double max ) const
 		{
 			if ( (q(j) < mins[j]) || (q(j) > maxs[j]) )
 			{
-	//			cerr << "FRM:    " << this.q.transpose()*180./M_PI << endl;
-	//			cerr << "EXCEED: " << q.transpose() << endl;
-	//			cerr << "DES:    " << dst.transpose()*180./M_PI << endl;
+#if 0
+				cerr << "FRM:    " << this->q.transpose()*180./M_PI << endl;
+				cerr << "EXCEED: " << q.transpose() << endl;
+				cerr << "MIN: " << mins.transpose() << endl;
+				cerr << "MAX: " << maxs.transpose() << endl;
+				cerr << "DES:    " << dst.transpose()*180./M_PI << endl;
+#endif
 				violate_joint_limit = true;
 				break;
 			}
@@ -266,11 +274,8 @@ double WbcNode::project( Node<DOF> *_np, double step, double max ) const
 
 		VectorXd Q = getQ(q), r1;
 		pthread_mutex_lock(&link_mutex);
-		for ( int j = 0 ; j < 10 ; j++ )
-		{
-			myJoint[j].setTheta(Q(j));
-		}
-		r1 = myJoint[9].getGlobalPos(hand);
+		myModel.updateState(Q);
+		r1 = myModel.joints[9].getGlobalPos(hand);
 		pthread_mutex_unlock(&link_mutex);
 
 	//	cerr << "New Node" << q.transpose()*180./M_PI << endl;
@@ -287,12 +292,12 @@ double WbcNode::project( Node<DOF> *_np, double step, double max ) const
 		else if ( err > 0.03*0.03 )
 		{
 //			VectorXd modified;
-	//		cerr << "From  : " << this.q.transpose()<<endl;
-	//		cerr << "Before: " << q.transpose()<<endl;
+//			cerr << "From  : " << this->q.transpose()<<endl;
+//			cerr << "Before: " << q.transpose()<<endl;
 //			modified = np->q + np->traction * diff;
 //			np->q = modified;
-	//		cerr << "After : " << np.q.transpose()<<endl;
-	//		np->getProjection();
+//			cerr << "After : " << np.q.transpose()<<endl;
+//			np->getProjection();
 			break;
 		}
 		updated = true;
@@ -325,22 +330,9 @@ Node<DOF> *WbcNode::copy(void) const
 	return (Node<DOF> *)ret;
 }
 
-WbcRRT::WbcRRT(void) 
+Node<DOF> *WbcNode::create(const VectorXd &min, const VectorXd &max)
 {
-}
-
-WbcRRT::WbcRRT(double min_, double max_, double step_) : RRT<DOF>(min_, max_, step_ )
-{
-}
-
-WbcRRT::WbcRRT(VectorXd min_, VectorXd max_, double step_) : RRT<DOF>(min_, max_, step_)
-{
-	cerr << "WbcRRT created" << endl;
-}
-
-Node<DOF> *WbcRRT::getNewNode(void)
-{
-	return (Node<DOF> *)new WbcNode;
+	return (Node<DOF> *)new WbcNode(min, max);
 }
 
 WbcPath::WbcPath(void)

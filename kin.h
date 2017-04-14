@@ -6,6 +6,7 @@
 using namespace Eigen;
 
 class Joint;
+class pos3D;
 
 class Joints
 {
@@ -29,7 +30,9 @@ public:
 
 				Joint(void);
 	void		updateOri(void);
+	VectorXd	getGlobalPos(const pos3D &local);
 	VectorXd	getGlobalPos(const VectorXd &local);
+	VectorXd	getGlobalPos(const double *local);
 	MatrixXd	getGlobalOri(void);
 	void		getGlobalOri(double *mat);
 	void		setRot(VectorXd quat);
@@ -71,17 +74,52 @@ class pos3D
 
 		return *this;
 	}
-	double& operator[](int index)
+	double* operator=(double *src)
+	{
+		x[0] = src[0];	
+		x[1] = src[1];	
+		x[2] = src[2];	
+
+		return x;
+	}
+	double* operator=(const pos3D &src)
+	{
+		x[0] = src.x[0];	
+		x[1] = src.x[1];	
+		x[2] = src.x[2];	
+
+		return x;
+	}
+
+	double* operator=(const VectorXd &src)
+	{
+		x[0] = src[0];	
+		x[1] = src[1];	
+		x[2] = src[2];	
+
+		return x;
+	}
+	
+	double get(const int index) const
 	{
 		return x[index];
 	}
-	static double dot(pos3D &p1, pos3D &p2)
+
+	double& operator[](const int index)
+	{
+		return x[index];
+	}
+	static double dot(const pos3D &p1, const pos3D &p2)
 	{
 		return p1.x[0]*p2.x[0] + p1.x[1]*p2.x[1] + p1.x[2]*p2.x[2];
 	}
-	static double norm2(pos3D &p)
+	static double norm2(const pos3D &p) 
 	{
 		return dot(p,p);
+	}
+	static double norm(const pos3D &p) 
+	{
+		return sqrt(dot(p,p));
 	}
 };
 
@@ -92,6 +130,7 @@ class Link
 	pos3D	from;
 	pos3D	to;
 	double	radius;
+	double	length;
 
 	static  double getDistance( Link &p1, Link &p2 );
 };

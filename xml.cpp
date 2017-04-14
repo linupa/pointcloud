@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <iostream>
 #include "xml.h"
+#include "kin.h"
 
 using namespace std;
 using namespace Eigen;
@@ -17,7 +18,7 @@ XmlNode::XmlNode(void)
 	pos		= VectorXd::Zero(3);
 	com		= VectorXd::Zero(3);
 	mass	= 0;
-	childs	= NULL;
+	child	= NULL;
 }
 void XmlNode::parseXML(const TiXmlNode *myXML)
 {
@@ -62,10 +63,9 @@ void XmlNode::parseXML(const TiXmlNode *myXML)
 			{
 				// Create New Joint Node
 				cerr << "Create New Node" << endl;
-				XmlNode *child = new XmlNode;
-				child->parseXML(myXML->FirstChild());
-//				childs.push_back(child);
-				childs = child;
+				XmlNode *ch = new XmlNode;
+				ch->parseXML(myXML->FirstChild());
+				child = ch;
 			}
 			else if ( strcmp(myXML->Value(), "jointName") == 0 )
 			{
@@ -134,6 +134,132 @@ void XmlNode::parseXML(const TiXmlNode *myXML)
 				mass= atof(name);
 
 				cerr << "Mass " << endl << mass << endl;
+			}
+			break;
+		}
+	}
+	while ( myXML = myXML->NextSibling() );
+
+}
+
+XmlLinkNode::XmlLinkNode(void)
+{
+	sprintf(name, "---");
+	from	= VectorXd::Zero(3);
+	to		= VectorXd::Zero(3);
+	index	= 0;
+	radius	= 0.;
+	length	= 0.;
+	linkList.clear();
+}
+void XmlLinkNode::parseXML(const TiXmlNode *myXML)
+{
+	if ( !myXML ) return;
+
+	XmlNode *Child;
+	TiXmlNode* pChildXML;
+	TiXmlText* pTextXML;
+	int num;
+	bool skip = false;
+		
+	do 
+	{
+		int t = myXML->Type();
+		bool hasChild = (myXML->FirstChild() != NULL);
+
+		switch ( t )
+		{
+		case TiXmlNode::TINYXML_DOCUMENT:
+			cerr << "Document " << hasChild << endl;
+			if ( hasChild )
+				parseXML(myXML->FirstChild());
+			break;
+		case TiXmlNode::TINYXML_DECLARATION:
+			cerr << "declaration " << hasChild << endl;
+			if ( hasChild )
+				parseXML(myXML->FirstChild());
+			break;
+		case TiXmlNode::TINYXML_ELEMENT:
+			if ( strcmp(myXML->Value(),"dynworld") == 0 )
+			{
+				cerr << "dynworld " << hasChild << endl;
+				parseXML(myXML->FirstChild());
+			}
+			else
+			if ( strcmp(myXML->Value(),"baseNode") == 0 )
+			{
+				cerr << "baseNode" << endl;
+				linkList.clear();
+				parseXML(myXML->FirstChild());
+			}
+			else if ( strcmp(myXML->Value(),"linkNode") == 0 )
+			{
+				// Create New Joint Node
+				cerr << "Create New Link Node " << linkList.size() << endl;
+				XmlLinkNode *link = new XmlLinkNode;
+				link->parseXML(myXML->FirstChild());
+				linkList.push_back(link);
+			}
+			else if ( strcmp(myXML->Value(), "linkName") == 0 )
+			{
+				const char *pName = (myXML->FirstChild())->Value();
+				cerr << "Link Name: " << pName << endl;
+				strncpy(name, pName, 20);
+				
+			}
+			else if ( strcmp(myXML->Value(),"from") == 0 )
+			{
+				int i = 0;
+				char name[50], *t;
+				strcpy(name, myXML->FirstChild()->Value());
+				VectorXd v(3);
+
+				t = strtok(name, ", ");
+				while ( t != NULL )
+				{
+					v(i++) = atof(t);
+					t = strtok(NULL, ", ");
+				}
+
+				cerr << "From " << endl << v << endl;
+				from = v;
+			}
+			else if ( strcmp(myXML->Value(),"to") == 0 )
+			{
+				int i = 0;
+				char name[50], *t;
+				strcpy(name, myXML->FirstChild()->Value());
+				VectorXd v(3);
+
+				t = strtok(name, ", ");
+				while ( t != NULL )
+				{
+					v(i++) = atof(t);
+					t = strtok(NULL, ", ");
+				}
+
+				cerr << "To " << endl << v << endl;
+				to = v;
+			}
+			else if ( strcmp(myXML->Value(),"index") == 0 )
+			{
+				int i = 0;
+				char name[50], *t;
+				strcpy(name, myXML->FirstChild()->Value());
+
+				index= atoi(name);
+
+				cerr << "Index " << endl << index << endl;
+			}
+			else if ( strcmp(myXML->Value(),"radius") == 0 )
+			{
+				int i = 0;
+				char name[50], *t;
+				strcpy(name, myXML->FirstChild()->Value());
+
+				radius= atof(name);
+
+				cerr << "Radius " << endl << radius << endl;
 			}
 			break;
 		}

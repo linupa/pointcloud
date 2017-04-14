@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <iostream>
-#include <tinyxml.h>
+#include "tinyxml.h"
 #include <sys/time.h>
 
 #include <jspace/Model.hpp>
@@ -32,12 +32,15 @@
 #include "Comm.h"
 #include "kin.h"
 #include "timestamp.h"
+#include "model.h"
 
 #define CHECK_LIMIT
 
 using namespace std;
 using namespace boost;
 using namespace jspace;
+
+typedef RRT<DOF> WbcRRT;
 
 static int win_width(800);
 static int win_height(600);
@@ -46,13 +49,14 @@ static scoped_ptr<jspace::Model> model;
 static scoped_ptr<jspace::Model> model_planning;
 State body_state(9, 9, 6);
 
+KinModel myModel;
+
 vector<VectorXd> elbow_log;
 vector<VectorXd> elbow_des_log;
 vector<double>   time_log;
 //void dump_to_stdout( TiXmlNode* pParent, unsigned int indent = 0);
 void *plan(void *);
 
-XmlNode baseNode;
 bool bSimul = false;
 bool bPlan = false;
 bool bPlanning = false;
@@ -72,7 +76,6 @@ static double dt = 0.001;
 VectorXd desired_pos;
 extern int tickCount;
 extern double seq; 
-vector<Joint>	myJoint(10);
 vector<Link>	myLocalLink;
 vector<Link>	myGlobalLink;
 WbcRRT *rrt;
@@ -121,89 +124,79 @@ pthread_mutex_t link_mutex;
 Comm *pRecvComm;
 Comm *pCmdComm;
 
+
+#define INIT_JOINT	(0x0001)
+#define INIT_LINK	(0x0002)
+
 void periodicTask(void);
 int main(int argc, char *argv[])
 {
 	int c;
 	TiXmlDocument doc;
-	bool loaded = false;
+	int loaded = 0;
 	const char *robot_spec;
 	pthread_t planning_thread;
 
-	while ( (c = getopt(argc, argv, "f:c:t:dh") ) != -1 )
+	while ( (c = getopt(argc, argv, "j:l:t:dh") ) != -1 )
 	{
 		switch (c)
 		{
-			case 'f':
-				try 
-				{
-					doc = TiXmlDocument( optarg );
-					robot_spec = optarg;
-					loaded = doc.LoadFile();
-
-					cerr << "Load XML File " << loaded << endl;
-				}
-				catch (int e)
-				{
-					std::cerr << "ERROR!!!";
-				}
+			case 'j':
+				loaded |= (myModel.initJoint(optarg))?INIT_JOINT:0;
+				robot_spec = optarg;
+				break;
+			case 'l':
+				loaded |= (myModel.initLink(optarg))?INIT_LINK:0;
+				break;
+			case 'h':
+				fprintf(stderr, "-j <joint list>\n-l <link list>\n");
 				break;
 			default:
 				break;
+
 		}
-
 	}
-	if ( !loaded )
+	if ( !(loaded != (INIT_LINK|INIT_JOINT)) )
 		exit(-1);
-
-	TiXmlNode* pChild;
-	TiXmlText* pText;
-	int t = doc.Type();
-
-	baseNode.parseXML(&doc);
-
-	XmlNode *node = baseNode.childs;
 
 	q = VectorXd::Zero(10);
 	endeffector = VectorXd::Zero(3);;
 	q0 = q;
 
-	int i = 0, j;
-	while ( node )
-	{
-		if ( node->name )
-			cerr << node->name << endl;
-
-		Joint link;
-
-		link.com = node->com;
-		link.setRot(node->rot.block(0,0,3,1), node->rot(3));
-		link.trans	= node->pos;
-		link.axis	= 2;
-		link.mass	= node->mass;
-		if ( i > 0 )
-			link.parent = &(myJoint[i-1]);
-		else
-			link.parent = NULL;
-		myJoint[i] = link;
-
-		node = node->childs;
-		i++;
-	}
-
+	cerr << "Model Init Done... " << endl;
 	r0.clear();
+	myModel.updateState(q0);
+
+	cerr << "Model update... " << endl;
+
+	int i, j;
 	for ( j = 0 ; j < 10 ; j++ )
 	{
-		myJoint[j].setTheta(q0[j]);
-	}
-	for ( j = 0 ; j < 10 ; j++ )
-	{
-		r0.push_back(myJoint[j].getGlobalPos(myJoint[j].com));
+		r0.push_back(myModel.joints[j].getGlobalPos(myModel.joints[j].com));
 	}
 
 	int idxs[] = {1, 1, 2, 2, 2, 4, 6, 9};
-	double fromJoint[][3]	= { {0.,0.,0.06},    {0.,0.,-.06},    {0.,0.,0.06},   {0.,0.,-0.06},  {.2337,0.,-.06},    {0.,0.,0.},           {0.,0.,0.},     {0.,0.,0.}};
-	double toJoint[][3]		= { {0.1397,0.,0.06},{0.1397,0.,-.06},{.2337,0.,0.06},{.2337,0.,-.06},{.2337,0.,-0.18465},{0.03175,-0.27857,0.},{0.,0.27747,0.},{0.,-.1,0.}};
+	double radii[] = {0.07, 0.07, 0.07, 0.07, 0.06, 0.06, 0.06, 0.06};
+	double fromJoint[][3]	= { 
+		{0.,0.,0.06},    
+		{0.,0.,-.06},    
+		{0.,0.,0.06},   
+		{0.,0.,-0.06},  
+		{.2337,0.,-0.18465},
+		{0.03175,-0.27857,0.},
+		{0.,0.,0.},     
+		{0.,-.1,0.}
+	};
+	double toJoint[][3]		= { 
+		{0.1397,0.,0.06},
+		{0.1397,0.,-.06},
+		{.2337,0.,0.06},
+		{.2337,0.,-.06},
+		{.2337,0.,-.06},    
+		{0.,0.,0.},           
+		{0.,0.27747,0.},
+		{0.,0.,0.}
+	};
 
 	int numLinks = sizeof(idxs) / sizeof(int);
 	cerr << "Num Link : " << numLinks << " " << sizeof(fromJoint) << "/" << sizeof(double) << endl;
@@ -211,18 +204,21 @@ int main(int argc, char *argv[])
 	assert( sizeof(toJoint) / sizeof(double) / 3 == numLinks);
 
 	myLocalLink.clear();
+	pos3D temp;
 	for ( i = 0 ; i < numLinks ; i++ )
 	{
 		Link link;
-		for ( j = 0 ; j < 3 ; j++ )
-		{
-			link.from[j] = fromJoint[i][j];
-			link.to[j] = toJoint[i][j];
-		}
+		link.index	= idxs[i];
+		link.radius	= radii[i];
+		link.from	= fromJoint[i];
+		link.to		= toJoint[i];
+		temp.sub(link.from, link.to);
+		link.length	= pos3D::norm(temp);
 		myLocalLink.push_back(link);
 	}
 	myGlobalLink = myLocalLink;
 	
+	cerr << "OpenGL Init" << endl;
 	glutInit(&argc, argv);
 
 	pthread_mutex_init( &mutex, NULL );
@@ -367,26 +363,18 @@ void periodicTask(void)
 		int j;
 
 		pthread_mutex_lock(&link_mutex);
-		for ( j = 0 ; j < 10 ; j++ )
-		{
-			myJoint[j].setTheta(q0[j]);
-		}
-		elbow0 = myJoint[5].getGlobalPos(VectorXd::Zero(3));
 
-		for ( j = 0 ; j < 10 ; j++ )
-		{
-			myJoint[j].setTheta(q[j]);
-		}
-		elbow = myJoint[5].getGlobalPos(VectorXd::Zero(3));
+		myModel.updateState(q0);
+		elbow0 = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
+
+		myModel.updateState(q);
+		elbow = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
 
 		if ( sentQ.size() == 10 )
 		{
 //			cerr << "sentQ " << sentQ.transpose() << endl;
-			for ( j = 0 ; j < 10 ; j++ )
-			{
-				myJoint[j].setTheta(sentQ[j]);
-			}
-			elbow_des = myJoint[5].getGlobalPos(VectorXd::Zero(3));
+			myModel.updateState(sentQ);
+			elbow_des = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
 		}
 		else
 		{
@@ -668,14 +656,16 @@ void *plan(void *)
 	cerr << "PRM init" << endl;
 	prm = new PRM<9>(Mins, Maxs, STEP);
 	cerr << "PRM init done" << endl;
+	WbcNode::mins = Mins;
+	WbcNode::maxs = Maxs;
 
 	while (1)
 	{
 		int next_count = 1000;
 
 		rrt = new WbcRRT(Mins, Maxs, STEP);
+		rrt->nodeCreator = WbcNode::create;
 		prm->init();
-//		rrt = new WbcRRT<9>(-M_PI, M_PI, STEP);
 #if 0
 		Node<9> *newNode = new Node<9>;
 
@@ -698,16 +688,16 @@ void *plan(void *)
 		int count = 0;
 		q0 = getQ(body_state.position_);
 		r0.clear();
+
 		pthread_mutex_lock(&link_mutex);
+		myModel.updateState(q);
+		elbow0 = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
 		for ( int j = 0 ; j < 10 ; j++ )
 		{
-			myJoint[j].setTheta(q[j]);
-		}
-		for ( int j = 0 ; j < 10 ; j++ )
-		{
-			r0.push_back(myJoint[j].getGlobalPos(myJoint[j].com));
+			r0.push_back(myModel.joints[j].getGlobalPos(myModel.joints[j].com));
 		}
 		pthread_mutex_unlock(&link_mutex);
+
 		fprintf(stderr, "Start Planning... %d,%d\n", rrt->numNodes, rrt->numEdges);
 		cerr << q0.transpose() << endl;
 		while (bPlan)
@@ -799,11 +789,8 @@ void *plan(void *)
 
 					// Derive elbow location to get distance
 					pthread_mutex_lock(&link_mutex);
-					for ( int j = 0 ; j < 10 ; j++ )
-					{
-						myJoint[j].setTheta(Q[j]);
-					}
-					VectorXd elbow = myJoint[5].getGlobalPos(VectorXd::Zero(3));
+					myModel.updateState(Q);
+					VectorXd elbow = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
 					VectorXd dv;
 					double dd;
 					dv = elbow - elbow0;
@@ -832,7 +819,7 @@ void *plan(void *)
 				for ( i = 0 ; i < 500 ; i++ )
 				{
 					double t = i * 0.01;
-					d_t[i] = d_max * ( 1. - exp(-1.5*t));
+					d_t[i] = d_max * ( 1. - exp(-2.5*t));
 				}
 
 				eta[0] = 0;
@@ -895,11 +882,8 @@ void *plan(void *)
 						Q = qp1[idx];
 
 					pthread_mutex_lock(&link_mutex);
-					for ( int j = 0 ; j < 10 ; j++ )
-					{
-						myJoint[j].setTheta(Q[j]);
-					}
-					VectorXd elbow = myJoint[5].getGlobalPos(VectorXd::Zero(3));
+					myModel.updateState(Q);
+					VectorXd elbow = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
 					pthread_mutex_unlock(&link_mutex);
 
 
@@ -1087,6 +1071,7 @@ double project1( Node<T> *np )
 
 	return err;
 }
+
 template <int T>
 double project2( const Node<T> *_p, Node<T> *_np )
 {
@@ -1281,21 +1266,6 @@ double getPotential(int mode, const VectorXd &contact, const WbcNode &node, cons
 	mask[7] = 1;
 //	VectorXd r[10];
 
-
-#if 0
-	pthread_mutex_lock(&link_mutex);
-	VectorXd q = getQ(node.q);
-	for ( j = 0 ; j < 10 ; j++ )
-	{
-		myJoint[j].setTheta(q[j]);
-	}
-	for ( j = 0 ; j < 10 ; j++ )
-	{
-		r[j] = myJoint[j].getGlobalPos(myJoint[j].com);
-	}
-	pthread_mutex_unlock(&link_mutex);
-#endif
-
 	for ( j = 0 ; j < 10 ; j++ )
 	{
 		VectorXd d = node.coms[j] - contact;
@@ -1306,28 +1276,28 @@ double getPotential(int mode, const VectorXd &contact, const WbcNode &node, cons
 			switch (mode)
 			{
 			case 1:
-				value[j] = weight[j] * d(0) * myJoint[j].mass; // X-
+				value[j] = weight[j] * d(0) * myModel.joints[j].mass; // X-
 				break;
 			case 2:
-				value[j] = - weight[j] * d(1) * myJoint[j].mass; // Y-
+				value[j] = - weight[j] * d(1) * myModel.joints[j].mass; // Y-
 				break;
 			case 3:
-				value[j] = weight[j] * d(2) * myJoint[j].mass; // Z+
+				value[j] = weight[j] * d(2) * myModel.joints[j].mass; // Z+
 				break;
 			}
 			if ( getPotentialVerbose )
 			{
-				cerr << d.transpose() << ":" << myJoint[j].mass << "(" << value[j] << ")" << endl;
+				cerr << d.transpose() << ":" << myModel.joints[j].mass << "(" << value[j] << ")" << endl;
 			}
 		}
 		else
 		{
-			value[j] = - sqrt(((r0[j] - node.coms[j]).transpose() * (r0[j] - node.coms[j]))(0)) * myJoint[j].mass;
-//			value[j] = - sqrt(((r0[j] - r[j]).transpose() * (r0[j] - r[j]))(0)) * myJoint[j].mass;
+			value[j] = - sqrt(((r0[j] - node.coms[j]).transpose() * (r0[j] - node.coms[j]))(0)) * myModel.joints[j].mass;
+//			value[j] = - sqrt(((r0[j] - r[j]).transpose() * (r0[j] - r[j]))(0)) * myModel.joints[j].mass;
 			if ( getPotentialVerbose )
 			{
-				cerr << (r0[j]-node.coms[j]).transpose() << ":" << myJoint[j].mass << "(" << value[j] << ")" << endl;
-//				cerr << (r0[j]-r[j]).transpose() << ":" << myJoint[j].mass << "(" << value[j] << ")" << endl;
+				cerr << (r0[j]-node.coms[j]).transpose() << ":" << myModel.joints[j].mass << "(" << value[j] << ")" << endl;
+//				cerr << (r0[j]-r[j]).transpose() << ":" << myModel.joints[j].mass << "(" << value[j] << ")" << endl;
 			}
 		}
 	}
@@ -1336,7 +1306,7 @@ double getPotential(int mode, const VectorXd &contact, const WbcNode &node, cons
 	for ( j = 0 ; j < 10 ; j++ )
 	{
 //		if ( getPotentialVerbose )
-//			cerr << value[j] << ":" << myJoint[j].mass << " ";
+//			cerr << value[j] << ":" << myModel.joints[j].mass << " ";
 		sum += value[j];
 	}
 //	if ( getPotentialVerbose )

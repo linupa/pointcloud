@@ -1,0 +1,62 @@
+<?xml version="1.0" ?>
+
+<dynworld>
+	<baseNode>
+		<linkNode>
+			<linkName>torso 1-1</linkName>
+			<from> 0.,0.,0.06 </from>
+			<to> 0.1397,0.,0.06 </to>
+			<index> 1 </index>
+			<radius> 0.07 </radius>
+		</linkNode>
+		<linkNode>
+			<linkName>torso 1-2</linkName>
+			<from> 0.,0.,-0.06 </from>
+			<to> 0.1397,0.,-0.06 </to>
+			<index> 1 </index>
+			<radius> 0.07 </radius>
+		</linkNode>
+		<linkNode>
+			<linkName>torso 2-1</linkName>
+			<from> 0.,0.,0.06 </from>
+			<to> .2337,0.,0.06 </to>
+			<index> 2 </index>
+			<radius> 0.07 </radius>
+		</linkNode>
+		<linkNode>
+			<linkName>torso 2-2</linkName>
+			<from> 0.,0.,-0.06 </from>
+			<to> .2337,0.,-0.06 </to>
+			<index> 2 </index>
+			<radius> 0.07 </radius>
+		</linkNode>
+		<linkNode>
+			<linkName>torso 2-3</linkName>
+			<from> .2337,0.,-0.18465 </from>
+			<to> .2337,0.,-0.06 </to>
+			<index> 2 </index>
+			<radius> 0.06 </radius>
+		</linkNode>
+		<linkNode>
+			<linkName>upper arm</linkName>
+			<from> 0.03175,-0.27857,0. </from>
+			<to> 0.,0.,0. </to>
+			<index> 4 </index>
+			<radius> 0.06 </radius>
+		</linkNode>
+		<linkNode>
+			<linkName>lower arm</linkName>
+			<from> 0.,0.,0. </from>
+			<to> 0.0,0.27747,0.0 </to>
+			<index> 6 </index>
+			<radius> 0.06 </radius>
+		</linkNode>
+		<linkNode>
+			<linkName>end effector</linkName>
+			<from> 0.,-0.1,0. </from>
+			<to> 0.,0.,0. </to>
+			<index> 9 </index>
+			<radius> 0.06 </radius>
+		</linkNode>
+	</baseNode>
+</dynworld>

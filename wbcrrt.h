@@ -39,22 +39,15 @@ public:
 	WbcNode(const double min, const double max);
 	WbcNode(const VectorXd &min, const VectorXd &max);
 	WbcNode(const WbcNode &src);
+	WbcNode(const Node<DOF> &src);
 
 	MatrixXd &getProjection(void);
 	virtual double project( Node<DOF> * , double step, double max) const;
 
 	static scoped_ptr<jspace::Model> model;
-};
-
-class WbcRRT : public RRT<DOF>
-{
-public:
-	WbcRRT(void);
-	WbcRRT(double min_, double max_, double step_ = 0.);
-	WbcRRT(VectorXd min_, VectorXd max_, double step_ = 0.);
-
-	virtual Node<DOF> *getNewNode(void);
-
+	static Node<DOF> *create(const VectorXd &min, const VectorXd &max);
+	static VectorXd	mins;
+	static VectorXd	maxs;
 };
 
 class WbcPath : public Path<DOF>
