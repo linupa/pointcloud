@@ -51,6 +51,7 @@ State body_state(9, 9, 6);
 
 KinModel myModel;
 
+Vector3d gGoal;
 vector<VectorXd> elbow_log;
 vector<VectorXd> elbow_des_log;
 vector<double>   time_log;
@@ -76,8 +77,8 @@ static double dt = 0.001;
 VectorXd desired_pos;
 extern int tickCount;
 extern double seq; 
-vector<Link>	myLocalLink;
-vector<Link>	myGlobalLink;
+//vector<Link>	myLocalLink;
+//vector<Link>	myGlobalLink;
 WbcRRT *rrt;
 PRM<9> *prm;
 extern double *value;
@@ -175,6 +176,7 @@ int main(int argc, char *argv[])
 		r0.push_back(myModel.joints[j].getGlobalPos(myModel.joints[j].com));
 	}
 
+#if 0
 	int idxs[] = {1, 1, 2, 2, 2, 4, 6, 9};
 	double radii[] = {0.07, 0.07, 0.07, 0.07, 0.06, 0.06, 0.06, 0.06};
 	double fromJoint[][3]	= { 
@@ -216,7 +218,8 @@ int main(int argc, char *argv[])
 		link.length	= pos3D::norm(temp);
 		myLocalLink.push_back(link);
 	}
-	myGlobalLink = myLocalLink;
+//	myGlobalLink = myLocalLink;
+#endif
 	
 	cerr << "OpenGL Init" << endl;
 	glutInit(&argc, argv);

@@ -27,6 +27,7 @@ using Eigen::MatrixXd;
 #define CLICK_THRESHOLD 3
 
 
+extern Vector3d gGoal;
 extern KinModel myModel;
 double target_pos[2];
 int point_pressed = -1;
@@ -82,8 +83,8 @@ double seq;
 int seq_ui = 0;
 int node_id = 0;
 
-extern vector<Link>	myLocalLink;
-extern vector<Link>	myGlobalLink;
+//extern vector<Link>	myLocalLink;
+//extern vector<Link>	myGlobalLink;
 //extern WbcRRT *rrt;
 extern PRM<9> *prm;
 double *value;
@@ -748,7 +749,8 @@ extern double	min_pos[2], max_pos[2];
 		myModel.updateState(Q);
 		for ( i = 0 ; i < 8 ; i++ )
 		{
-			Link link = myLocalLink[i];
+//			Link link = myLocalLink[i];
+			Link link = myModel.localLinks[i];
 			VectorXd r0	= myModel.joints[link.index].getGlobalPos(link.from);
 			VectorXd r	= myModel.joints[link.index].getGlobalPos(link.to);
 			glBegin(GL_LINES);
@@ -850,6 +852,8 @@ extern double	min_pos[2], max_pos[2];
 	}
 #endif
 	
+	glColor3f(0.0, 1.0, 0.0);
+	drawSphere(gGoal, 0.05, 100);
 
 	glLineWidth(1.0);
 
@@ -912,6 +916,8 @@ MyWindow(int width, int height, const char * title)
     pushYButton->callback(cb_pushy, this); 
     pushZButton = new Fl_Button(5, height - 35, 100, 30, "&PushZ"); 
     pushZButton->callback(cb_pushz, this); 
+    goalButton = new Fl_Button(5, height - 35, 100, 30, "&Goal"); 
+    goalButton->callback(cb_goal, this); 
 
 	printf("WIN: %p\n", this);
     quitButton = new Fl_Button(width - 105, height - 35, 100, 30, "&Quit"); 
@@ -980,15 +986,16 @@ resize(int x, int y, int w, int h)
 
 	Fl_Double_Window::resize(x, y, w, h);
 	sim->resize(0, 0, w-70, h-110);
-	mSliceSlider->resize(	10, 				h-35,	(w-305)/2 - 5,25);
-	mScaleSlider->resize(	10 + (w-305)/2 - 5,	h-35,	(w-305)/2 - 5,25);
-	mSeqSlider->resize(		10, 				h-70,	(w-305)/2 - 5,25);
-	mNodeSlider->resize(	10 + (w-305)/2 - 5,	h-70,	(w-305)/2 - 5,25);
-	mGroupSlider->resize(	10, 				h-105,	(w-305)/2 - 5,25);
-	mSizeSlider->resize(	10 + (w-305)/2 - 5,	h-105,	(w-305)/2 - 5,25);
+	mSliceSlider->resize(	10, 				h-35,	(w-375)/2 - 5,25);
+	mScaleSlider->resize(	10 + (w-375)/2 - 5,	h-35,	(w-375)/2 - 5,25);
+	mSeqSlider->resize(		10, 				h-70,	(w-375)/2 - 5,25);
+	mNodeSlider->resize(	10 + (w-375)/2 - 5,	h-70,	(w-375)/2 - 5,25);
+	mGroupSlider->resize(	10, 				h-105,	(w-375)/2 - 5,25);
+	mSizeSlider->resize(	10 + (w-375)/2 - 5,	h-105,	(w-375)/2 - 5,25);
 
 	mHighlightSlider->resize(w-40, 10, 30, h-60);
 
+	goalButton->resize(		w-375,	h - 105, 70, 25);
 	pushXButton->resize(	w-300,	h - 105, 70, 25);
 	pushYButton->resize(	w-300,	h - 70, 70, 25);
 	pushZButton->resize(	w-300,	h - 35, 70, 25);
@@ -1206,6 +1213,23 @@ cb_node(Fl_Widget *widget, void *param)
 	node_id = (int)pSlider->value();
 	if ( node_id > 0 )
 		cerr <<  prm->nodes[node_id-1]->q.transpose()*180./M_PI << endl;
+}
+
+void MyWindow::
+cb_goal(Fl_Widget *widget, void *param)
+{
+	int i;
+	Vector3d goal(3);
+	double bound[3][2] = {
+	{-0.3,0.3}, {-0.3,0.3}, {0,.5}
+	};
+
+	for ( i = 0 ; i < 3 ; i++ )
+	{
+		goal(i) = bound[i][0] + (double)rand() * (bound[i][1] - bound[i][0]) / RAND_MAX;
+	}
+
+	gGoal = goal;
 }
 
 MyWindow::~MyWindow(void)
