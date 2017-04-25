@@ -95,6 +95,7 @@ extern VectorXd elbow0;
 extern VectorXd elbow;
 extern VectorXd endeffector;
 extern void push(VectorXd dir);
+extern void intervention(void);
 
 //MySim::MySim(int xx, int yy, int width, int height) : Fl_Widget(xx, yy, width, height, "")
 MySim::MySim(int xx, int yy, int width, int height) : Fl_Gl_Window(xx, yy, width, height, "")
@@ -436,7 +437,6 @@ extern double	min_pos[2], max_pos[2];
     x_org = width / 4.0;
     y_org = height / 4.0;
 
-#if 1
 	if (firstTime)
 	{
 		fprintf(stderr, "GL Initialized\n");
@@ -556,50 +556,21 @@ extern double	min_pos[2], max_pos[2];
 	double mat[16] = {0.};
 
 	// Draw Skeleton of the Current State
-	pthread_mutex_lock(&link_mutex);
-	myModel.updateState(q);
-	for ( i = 0 ; i < myModel.numLinks ; i++ )
+	if ( goalIdx <= 0 )
 	{
-//		Link  link = myLocalLink[i];
-		Link	link = myModel.localLinks[i];
-
-		VectorXd r0	= myModel.joints[link.index].getGlobalPos(link.from);
-		VectorXd r	= myModel.joints[link.index].getGlobalPos(link.to);
-//		myModel.joints[link.index].getGlobalOri(mat);
-
-#if 0
-		glBegin(GL_LINES);
-		glVertex3f(r(0), r(1), r(2));
-		glVertex3f(r0(0), r0(1), r0(2));
-		glEnd();
-#else
-#if 0
-		GLUquadricObj *quadratic;
-		quadratic = gluNewQuadric();
-		glPushMatrix();
-		glTranslatef(r0(0), r0(1), r0(2));
-		glMultMatrixd(mat);
-		double _dir[3] = {0.};
-		glColor3f(0., 1., 0.);
-		switch ( dirs[i] )
+		pthread_mutex_lock(&link_mutex);
+		myModel.updateState(q);
+		for ( i = 0 ; i < myModel.numLinks ; i++ )
 		{
-			case 1:
-				_dir[1] = 1.;
-				break;
-			case 2:
-				_dir[0] = -1.;
-				break;
-		}
-		glRotatef(90., _dir[0], _dir[1], _dir[2] );
-		gluCylinder(quadratic, link.radius, link.radius, link.length,32,32);
-		glPopMatrix();
-#else
+			Link	link = myModel.localLinks[i];
 
-		drawCapsule(r0, r, link.radius);
-#endif
-#endif
+			VectorXd r0	= myModel.joints[link.index].getGlobalPos(link.from);
+			VectorXd r	= myModel.joints[link.index].getGlobalPos(link.to);
+
+			drawCapsule(r0, r, link.radius);
+		}
+		pthread_mutex_unlock(&link_mutex);
 	}
-	pthread_mutex_unlock(&link_mutex);
 
 	glColor3f(1.0, 0.0, 0.0);
 	VectorXd unit = VectorXd::Zero(3);
@@ -747,18 +718,24 @@ extern double	min_pos[2], max_pos[2];
 		// Draw Skeleton of Plan
 		pthread_mutex_lock(&link_mutex);
 		myModel.updateState(Q);
-		for ( i = 0 ; i < 8 ; i++ )
+
+		for ( i = 0 ; i < myModel.numLinks ; i++ )
 		{
 //			Link link = myLocalLink[i];
 			Link link = myModel.localLinks[i];
 			VectorXd r0	= myModel.joints[link.index].getGlobalPos(link.from);
 			VectorXd r	= myModel.joints[link.index].getGlobalPos(link.to);
-			glBegin(GL_LINES);
-			glVertex3f(r(0), r(1), r(2));
-			glVertex3f(r0(0), r0(1), r0(2));
-			glEnd();
-
-			r0 = r;
+			if ( goalIdx <= 0 )
+			{
+				glBegin(GL_LINES);
+				glVertex3f(r(0), r(1), r(2));
+				glVertex3f(r0(0), r0(1), r0(2));
+				glEnd();
+			}
+			else
+			{
+				drawCapsule(r0, r, link.radius);
+			}
 		}
 		pthread_mutex_unlock(&link_mutex);
 
@@ -768,14 +745,18 @@ extern double	min_pos[2], max_pos[2];
 		VectorXd r, r1;
 		pthread_mutex_lock(&link_mutex);
 		myModel.updateState(Q);
-		for ( i = 0 ; i < 10 ; i++ )
+		for ( i = 0 ; i < DOF+1 ; i++ )
 		{
 			r = myModel.joints[i].getGlobalPos(myModel.joints[i].com);
-			glPushMatrix();
 			glColor3f(1.0, 1.0, 1.0);
+#if 0
+			glPushMatrix();
 			glTranslatef(r(0), r(1), r(2));
 			glutSolidSphere(0.020,20,20);
 			glPopMatrix();
+#else
+			drawSphere(r, 0.02, 20);
+#endif
 		}
 
 		r = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
@@ -785,38 +766,27 @@ extern double	min_pos[2], max_pos[2];
 		pthread_mutex_unlock(&link_mutex);
 
 		// Elbow
-		glPushMatrix();
-		glColor3f(1.0, 0.0, 0.0);
-		glTranslatef(r(0), r(1), r(2));
-		glutSolidSphere(0.040,20,20);
-		glPopMatrix();
+		glColor3f(0.0, 0.0, 0.1);
+		drawSphere(r, 0.04, 20);
 
 		// End Effector
-		glPushMatrix();
 		glColor3f(0.0, 0.0, 1.0);
-		glTranslatef(r1(0), r1(1), r1(2));
-		glutSolidSphere(0.040,20,20);
-		glPopMatrix();
-#endif
+		drawSphere(r1, 0.04, 20);
 	}
 
+#if 0
 	glPushMatrix();
 	glColor3f(1.,0.,0.);
 	glTranslatef(0.3, -0.1, 0.2);
 	glutSolidSphere(0.025,20,20);
 	glPopMatrix();
+#endif
 	
-	glPushMatrix();
 	glColor3f(0.0, 1.0, 0.0);
-	glTranslatef(elbow0(0), elbow0(1), elbow0(2));
-	glutSolidSphere(0.020,20,20);
-	glPopMatrix();
+	drawSphere(elbow0, 0.020,20);
 
-	glPushMatrix();
 	glColor3f(0.0, 0.0, 1.0);
-	glTranslatef(elbow(0), elbow(1), elbow(2));
-	glutSolidSphere(0.040,20,20);
-	glPopMatrix();
+	drawSphere(elbow, 0.040,20);
 
 	glColor3f(1.0, 1.0, 1.0);
 	glLineWidth(3.0);
@@ -825,9 +795,12 @@ extern double	min_pos[2], max_pos[2];
 	glVertex3f(elbow(0), elbow(1), elbow(2));
 	glEnd();
 
-	glPushMatrix();
 	glColor3f(0.,1.,0.);
-	glTranslatef(endeffector(0), endeffector(1), endeffector(2));
+	drawSphere(endeffector, 0.025, 20);
+
+	glPushMatrix();
+	glColor3f(1.,0.,0.);
+	glTranslatef(.4, -.2, .2);
 	glutSolidSphere(0.025,20,20);
 	glPopMatrix();
 
@@ -939,7 +912,7 @@ MyWindow(int width, int height, const char * title)
 
 	mSliceSlider = new Fl_Value_Slider( 10, height - 30, width / 4 - 100, 30, "");
 	mSliceSlider->type(FL_HORIZONTAL);
-	mSliceSlider->bounds(0., 9.);
+	mSliceSlider->bounds(0., 16.);
 	mSliceSlider->callback(cb_control, this);
 	mSliceSlider->step(1.);
 	mSliceSlider->value(1.);
@@ -1215,11 +1188,22 @@ cb_node(Fl_Widget *widget, void *param)
 		cerr <<  prm->nodes[node_id-1]->q.transpose()*180./M_PI << endl;
 }
 
+double goals[][3] =
+{
+{0.167017, -0.141333,  0.440087},
+{0.253526, -0.0720188,   0.230207},
+{0.242192, -0.243455,  0.448451},
+{-0.0480875, -0.265047,  0.337994},
+{-0.0969532, -0.231932,  0.419739},
+{0.298594, -0.243733,  0.485369}
+};
+
 void MyWindow::
 cb_goal(Fl_Widget *widget, void *param)
 {
 	int i;
 	Vector3d goal(3);
+#if 0
 	double bound[3][2] = {
 	{-0.3,0.3}, {-0.3,0.3}, {0,.5}
 	};
@@ -1228,8 +1212,18 @@ cb_goal(Fl_Widget *widget, void *param)
 	{
 		goal(i) = bound[i][0] + (double)rand() * (bound[i][1] - bound[i][0]) / RAND_MAX;
 	}
+#else
+	static int idx = 0;
+
+	goal(0) = goals[idx][0];
+	goal(1) = goals[idx][1];
+	goal(2) = goals[idx][2];
+	idx = (idx+1) % 5;
+#endif
 
 	gGoal = goal;
+
+ 	intervention();
 }
 
 MyWindow::~MyWindow(void)

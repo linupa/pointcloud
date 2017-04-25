@@ -47,7 +47,7 @@ static int win_height(600);
 static char win_title[100];
 static scoped_ptr<jspace::Model> model;
 static scoped_ptr<jspace::Model> model_planning;
-State body_state(9, 9, 6);
+State body_state(16, 16, 6);
 
 KinModel myModel;
 
@@ -80,7 +80,7 @@ extern double seq;
 //vector<Link>	myLocalLink;
 //vector<Link>	myGlobalLink;
 WbcRRT *rrt;
-PRM<9> *prm;
+PRM<DOF> *prm;
 extern double *value;
 extern int seq_ui;
 
@@ -95,25 +95,27 @@ VectorXd endeffector;
 void push(VectorXd dir);
 double getPotential(int mode, const VectorXd &contact, const WbcNode &node, const vector<VectorXd> &r0);
 
+void intervention(void);
+
 VectorXd getQ(const VectorXd &uq)
 {
-	VectorXd ret = VectorXd::Zero(10);
+	VectorXd ret = VectorXd::Zero(myModel.numJoints);
 
-	assert(uq.size() == 9);
+	assert(uq.size() == myModel.numJoints-1);
 
 	ret.block(0,0,2,1) = uq.block(0,0,2,1);
-	ret.block(2,0,8,1) = uq.block(1,0,8,1);
+	ret.block(2,0,myModel.numJoints-2,1) = uq.block(1,0,myModel.numJoints-2,1);
 
 	return ret;
 }
 VectorXd getQa(const VectorXd &q)
 {
-	VectorXd ret = VectorXd::Zero(9);
+	VectorXd ret = VectorXd::Zero(myModel.numJoints-1);
 
-	assert(q.size() == 10);
+	assert(q.size() == myModel.numJoints);
 
 	ret.block(0,0,2,1) = q.block(0,0,2,1);
-	ret.block(2,0,7,1) = q.block(3,0,7,1);
+	ret.block(2,0,myModel.numJoints-3,1) = q.block(3,0,myModel.numJoints-3,1);
 
 	return ret;
 }
@@ -160,10 +162,11 @@ int main(int argc, char *argv[])
 	if ( !(loaded != (INIT_LINK|INIT_JOINT)) )
 		exit(-1);
 
-	q = VectorXd::Zero(10);
+	q = VectorXd::Zero(myModel.numJoints);
 	endeffector = VectorXd::Zero(3);;
 	q0 = q;
 
+	body_state = State(myModel.numJoints-1, myModel.numJoints-1, 6);
 	cerr << "Model Init Done... " << endl;
 	r0.clear();
 	myModel.updateState(q0);
@@ -230,6 +233,8 @@ int main(int argc, char *argv[])
 
 	model.reset(test::parse_sai_xml_file(robot_spec, false));
 	model->setConstraint("Dreamer_Torso");
+	
+	cerr << "DOF " << model->getNDOF() << endl;
 
 	WbcNode::model.reset(test::parse_sai_xml_file(robot_spec, false));
 	WbcNode::model->setConstraint("Dreamer_Torso");
@@ -252,7 +257,7 @@ MatrixXd getJacobian(const Model &model)
 {
 	MatrixXd Jfull, J;
 	Vector actual_;
-	taoDNode const *end_effector_node_ = model.getNode(9);
+	taoDNode const *end_effector_node_ = model.getNode(DOF);
 	jspace::Transform ee_transform;
 	model.computeGlobalFrame(end_effector_node_,
 		0.0, -0.05, 0.0, ee_transform);
@@ -266,14 +271,14 @@ MatrixXd getJacobian(const Model &model)
 bool pushing = false;
 
 extern int push_type;
-int qmap[] = {0,1,3,4,5,6,7,8,9};
+int qmap[] = {0,1,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
 Timestamp ts1("Period");
 void periodicTask(void)
 {
 	Vector tau1, tau2, tau;
 	Vector fullJpos_, fullJvel_;
 	Vector actual_;
-	Vector desired_posture = Vector::Zero(9);
+	Vector desired_posture = Vector::Zero(DOF);
 	MatrixXd UNcBar;
 	MatrixXd phi;
 	MatrixXd phiinv; 
@@ -303,7 +308,7 @@ void periodicTask(void)
 		{
 			double *pData = (double *)msg.data;
 //			fprintf(stderr, "%d data\n", msg.size);
-			for ( i = 0 ; i < 9 ; i++ )
+			for ( i = 0 ; i < DOF ; i++ )
 			{
 				q[qmap[i]] = pData[i];
 			}
@@ -324,7 +329,7 @@ void periodicTask(void)
 				VectorXd q_err;
 
 				qa = getQa(q);
-				q_des = VectorXd::Zero(9);
+				q_des = VectorXd::Zero(DOF);
 				q_des(5) = 1.57;
 				VectorXd  tau;
 
@@ -342,14 +347,14 @@ void periodicTask(void)
 			count++;
 		}
 #if 0
-		for ( i = 0 ; i < 9 ; i++ )
+		for ( i = 0 ; i < DOF ; i++ )
 		{
 			body_state.position_(i) = q[qmap[i]];
 			body_state.velocity_(i) = 0.;
 		}
 #else
 		body_state.position_	= getQa(q);
-		body_state.velocity_	= VectorXd::Zero(9);
+		body_state.velocity_	= VectorXd::Zero(DOF);
 #endif
 
 #if 1
@@ -398,6 +403,7 @@ void periodicTask(void)
 			pthread_mutex_unlock(&mutex);
 		}
 
+#if 0
 		if ( seq_ui == 0 && rrt->numNodes > 0 && bPlanning == false && pushing == false)
 		{
 			if ( error(0) > 0.02 && bPlanning == false && pushing == false)
@@ -443,6 +449,7 @@ void periodicTask(void)
 			}
 //		cerr << "PUSH " << bPlanning << " " << pushing << endl;
 		}
+#endif
 	}
 	else
 	{
@@ -506,9 +513,12 @@ void periodicTask(void)
 		desired_pos(1) = -0.2;
 		desired_pos(2) = 0.2;
 
+		desired_posture(3) = M_PI/6.;
 		desired_posture(5) = M_PI/2.;
+		desired_posture(10) = -M_PI/6.;
+		desired_posture(12) = 0.;//M_PI/4.;
 
-		N1 = MatrixXd::Identity(9,9) - phi*J1star.transpose()*Lambda1*J1star;
+		N1 = MatrixXd::Identity(DOF,DOF) - phi*J1star.transpose()*Lambda1*J1star;
 
 		J2star = U*UNcBar*N1;
 		pseudoInverse(J2star*phi*J2star.transpose(),
@@ -542,7 +552,7 @@ void periodicTask(void)
 		fullJpos_ += fullJvel_ * dt;
 
 #if 0
-		for ( int i = 0 ; i < 9 ; i++ )
+		for ( int i = 0 ; i < DOF ; i++ )
 		{
 			body_state.position_(i) = fullJpos_[qmap[i]];
 			body_state.velocity_(i) = fullJvel_[qmap[i]];
@@ -607,12 +617,12 @@ void periodicTask(void)
 	if ( bSend && qp1.size() > 2 )
 	{
 		Message msg;
-		double qa[9];
+		double qa[DOF];
 		VectorXd qav;
 
 		qav = getQa(sentQ);
 		
-		for ( int i = 0 ; i < 9 ; i++ )
+		for ( int i = 0 ; i < DOF ; i++ )
 		{
 			qa[i] = qav(i);
 //			cerr << q[i] << " ";
@@ -635,8 +645,12 @@ void periodicTask(void)
 Vector Mins;
 Vector Maxs;
 // Nominal Joint Limits
-double mins[] = {	-90.,	-12,	-80,	-25,	-85,	  0,	-48,	-60,	-60};
-double maxs[] = {	 90.,	 43,	200,	150,	 85,	133,	230,	 60,	 60};
+double mins[] = {	-90.,	-12,	
+					-80,	-25,	-85,	  0,	-48,	-60,	-60,
+					-80,   -150,	-85,	  0,	-48,	-60,	-60};
+double maxs[] = {	 90.,	 43,	
+					200,	150,	 85,	133,	230,	 60,	 60,
+					200,	 25,	 85,	133,	230,	 60,	 60};
 // Actual Joint Limits
 //double mins[] = {	-90.,	-22,	-80,	-23,	-85,	  0,	-48,	-60,	-60};
 //double maxs[] = {	 90.,	 49,	200,	150,	 85,	133,	230,	 60,	 60};
@@ -650,14 +664,14 @@ void *plan(void *)
 {
 	fprintf(stderr, "Planning Thread Started...\n");
 	int i;
-	Mins = Maxs = VectorXd::Zero(9);
-	for ( i = 0 ; i < 9 ; i++ )
+	Mins = Maxs = VectorXd::Zero(DOF);
+	for ( i = 0 ; i < DOF ; i++ )
 	{
 		Mins(i) = mins[i] * M_PI / 180.;
 		Maxs(i) = maxs[i] * M_PI / 180.;
 	}
 	cerr << "PRM init" << endl;
-	prm = new PRM<9>(Mins, Maxs, STEP);
+	prm = new PRM<DOF>(Mins, Maxs, STEP);
 	cerr << "PRM init done" << endl;
 	WbcNode::mins = Mins;
 	WbcNode::maxs = Maxs;
@@ -670,7 +684,7 @@ void *plan(void *)
 		rrt->nodeCreator = WbcNode::create;
 		prm->init();
 #if 0
-		Node<9> *newNode = new Node<9>;
+		Node<DOF> *newNode = new Node<DOF>;
 
 		newNode->q = body_state.position_;
 		newNode->getProjection();
@@ -679,7 +693,7 @@ void *plan(void *)
 #else
 		rrt->reset();
 		rrt->nodes[0]->q = getQa(q); // body_state.position_;
-		for ( int i = 0 ; i < 9 ; i++ )
+		for ( int i = 0 ; i < DOF ; i++ )
 		{
 			rrt->qs[0][i] = rrt->nodes[0]->q(i);
 		}
@@ -770,7 +784,7 @@ void *plan(void *)
 	//			path.optimize(NULL, 10);
 
 				ts1.checkElapsed(0);
-				Node<9> *p = rrt->nodes[rrt->numNodes-1];
+				Node<DOF> *p = rrt->nodes[rrt->numNodes-1];
 				cerr << "Optimal path " << path.numNewNode << " nodes" << endl;
 				for ( int i = 0 ; i < path.numNewNode ; i++ )
 				{
@@ -778,7 +792,7 @@ void *plan(void *)
 					VectorXd Q;
 #if 0
 					Q = VectorXd::Zero(10);
-					for ( int i = 0 ; i < 9 ; i++ )
+					for ( int i = 0 ; i < DOF ; i++ )
 					{
 						Q(qmap[i]) = q_plan(i);
 					}
@@ -910,7 +924,7 @@ void *plan(void *)
 					VectorXd Q;
 #if 0
 					Q = VectorXd::Zero(10);
-					for ( int i = 0 ; i < 9 ; i++ )
+					for ( int i = 0 ; i < DOF ; i++ )
 					{
 						Q(qmap[i]) = q_plan(i);
 					}
@@ -1316,5 +1330,52 @@ double getPotential(int mode, const VectorXd &contact, const WbcNode &node, cons
 //		cerr << endl;
 
 	return sum;
+}
+
+void intervention(void)
+{
+	int i, j, num;
+	double ddmin[2] = {1e10, 1e10}, dmin;
+	int  idxmin[2] = {0};
+	Vector d, q;
+
+	num = rrt->numNodes;
+	cerr << "Check " << num << " nodes" << endl;
+	int link[] = {5,3};
+	for ( j = 0 ; j < 2 ; j++ )
+	for ( i = 0 ; i < num ; i++ )
+	{
+		double dd;
+
+		q =	getQ(rrt->nodes[i]->q);
+		myModel.updateState(q);
+		d = gGoal - myModel.joints[link[j]].getGlobalPos(VectorXd::Zero(3));
+		dd = d.transpose()*d;
+		if ( ddmin[j] > dd )
+		{
+			ddmin[j] = dd;
+			idxmin[j] = i;
+		}
+	}
+
+	int idx;
+	if ( ddmin[0] > ddmin[1] )
+	{
+		dmin = sqrt(ddmin[1]);
+		idx = idxmin[1];
+	}
+	else
+	{
+		dmin = sqrt(ddmin[0]);
+		idx = idxmin[0];
+	}
+	cerr << "Collision anticipation " << gGoal.transpose() << endl;
+	cerr << "closest point " << idx << " " << dmin << endl;
+//	q =	getQ(rrt->nodes[idxmin]->q);
+//	myModel.updateState(q);
+
+	bRandom = true;;
+	goalIdx = idx;
+	tickCount = 0;
 }
 

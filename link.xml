@@ -58,5 +58,26 @@
 			<index> 9 </index>
 			<radius> 0.06 </radius>
 		</linkNode>
+		<linkNode>
+			<linkName>left upper arm</linkName>
+			<from> 0.03175,-0.27857,0. </from>
+			<to> 0.,0.,0. </to>
+			<index> 11 </index>
+			<radius> 0.06 </radius>
+		</linkNode>
+		<linkNode>
+			<linkName>left lower arm</linkName>
+			<from> 0.,0.,0. </from>
+			<to> 0.0,0.27747,0.0 </to>
+			<index> 13 </index>
+			<radius> 0.06 </radius>
+		</linkNode>
+		<linkNode>
+			<linkName>left end effector</linkName>
+			<from> 0.,-0.1,0. </from>
+			<to> 0.,0.,0. </to>
+			<index> 16 </index>
+			<radius> 0.06 </radius>
+		</linkNode>
 	</baseNode>
 </dynworld>

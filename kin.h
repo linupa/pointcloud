@@ -2,6 +2,7 @@
 #define __KIN_H__
 #include <iostream>
 #include <Eigen/Eigen>
+#include "xml.h"
 
 using namespace Eigen;
 
@@ -19,6 +20,7 @@ public:
 class Joint
 {
 public:
+	char 		name[JOINT_NAME_LEN];
 	VectorXd	com;
 	VectorXd	trans;
 	MatrixXd	rot;	
@@ -29,6 +31,7 @@ public:
 	bool		dirty;
 
 				Joint(void);
+				Joint(const Joint &src);
 	void		updateOri(void);
 	VectorXd	getGlobalPos(const pos3D &local);
 	VectorXd	getGlobalPos(const VectorXd &local);

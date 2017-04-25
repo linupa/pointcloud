@@ -33,11 +33,29 @@ Joints::~Joints(void)
 
 Joint::Joint(void)
 {
-	rot = MatrixXd::Zero(3,3);
+	rot = rot2 = MatrixXd::Zero(3,3);
 	com = trans = VectorXd::Zero(3);
 	mass	= 0.;
-	parent = NULL;
+	axis	= 0;
+	parent	= NULL;
 	dirty	= true;
+}
+
+Joint::Joint(const Joint &src)
+{
+	strcpy(name, src.name);
+	name[0] = 'a';
+	name[1] = '\0';
+	com		= src.com;
+	trans	= src.trans;
+	rot		= src.rot;
+	rot2	= src.rot2;
+	mass	= src.mass;
+	axis	= src.axis;
+	parent	= src.parent;
+	dirty	= src.dirty;
+
+	theta	= src.theta;
 }
 
 double Joint::setTheta(double theta_)
@@ -300,6 +318,7 @@ void Joint::setRot(VectorXd axis0, double rad)
 
 Joint &Joint::operator=(const Joint &src)
 {
+	strcpy(name, src.name);
 	com		= src.com;
 	trans	= src.trans;
 	rot		= src.rot;
@@ -307,6 +326,7 @@ Joint &Joint::operator=(const Joint &src)
 	theta	= src.theta;
 	axis	= src.axis;
 	mass	= src.mass;
+	dirty	= src.dirty;
 
 	return  *this;
 }

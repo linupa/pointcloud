@@ -2,6 +2,7 @@
 #define __MODEL_H__
 
 #include "kin.h"
+#include "xml.h"
 
 class KinModel
 {
@@ -15,6 +16,8 @@ public:
 
 	bool initJoint(char *filename);
 	bool initLink(char *filename);
+	void addJoint(const XmlNode *node, Joint *parent, int &index);
+	int numJoint(const XmlNode *node);
 	void updateState(double *states);
 	void updateState(VectorXd &states);
 	~KinModel(void);

@@ -11,8 +11,8 @@ all: $(build) $(target)
 
 
 #cflags = -g -I /usr/local/include -I /usr/local/include/eigen3 -I ../uta-wbc-dreamer/wbc_core/stanford_wbc/jspace/ -I ../uta-wbc-dreamer/wbc_core/stanford_wbc/opspace/include/ $(pkg-config --cflags gl)  -I ../libs
-cflags = -O3 -msse2 -I /usr/local/include -I /usr/local/include/eigen3 -I ../uta-wbc-dreamer/wbc_core/stanford_wbc/jspace/ -I ../uta-wbc-dreamer/wbc_core/stanford_wbc/opspace/include/ $(pkg-config --cflags gl) -I ../libs
-ldflags = -O3 -msse2 -ltinyxml -L/usr/local/lib -Wl,-L /usr/lib -lfltk -lfltk_gl -lGLU -lGL -lglut $(pkg-config --libs gl)-L $(build) -lwbc_core -lpthread -lutils -L ../libs/$(build)
+cflags = -O3 -g -msse2 -I /usr/local/include -I /usr/local/include/eigen3 -I ../uta-wbc-dreamer/wbc_core/stanford_wbc/jspace/ -I ../uta-wbc-dreamer/wbc_core/stanford_wbc/opspace/include/ $(pkg-config --cflags gl) -I ../libs
+ldflags = -O3 -g -msse2 -ltinyxml -L/usr/local/lib -Wl,-L /usr/lib -lfltk -lfltk_gl -lGLU -lGL -lglut $(pkg-config --libs gl)-L $(build) -lwbc_core -lpthread -lutils -L ../libs/$(build)
 
 $(target): $(objs)
 	g++ -o $@ $^ $(tinyxmlobjs) $(cflags) $(ldflags) 

@@ -4,6 +4,47 @@
 
 using namespace std;
 
+void KinModel::addJoint(const XmlNode *node, Joint *parent, int &index)
+{
+
+	Joint joint;
+	int myIndex = index;
+
+//	if ( node->name[0] )
+//		cerr << node->name << " " << myIndex << endl;
+//	else
+//		cerr << "---" << endl;
+
+	if ( node->name[0] )
+		memcpy(joint.name, node->name, JOINT_NAME_LEN-1);
+	else
+		memcpy(joint.name, "---", 4);
+	joint.com = node->com;
+	joint.setRot(node->rot.block(0,0,3,1), node->rot(3));
+	joint.trans	= node->pos;
+	joint.axis	= 2;
+	joint.mass	= node->mass;
+	joint.parent = parent;
+	joints[index++] = joint;
+
+	if ( node->child )
+		addJoint(node->child, &joints[myIndex], index);
+	if ( node->sibling )
+		addJoint(node->sibling, parent, index);
+}
+
+int KinModel::numJoint(const XmlNode *node)
+{
+	int ret = 1;
+
+	if ( node->child )
+		ret += numJoint(node->child);
+	if ( node->sibling )
+		ret += numJoint(node->sibling);
+
+	return ret;
+}
+
 bool KinModel::initJoint(char *filename)
 {
 	const char *robot_spec;
@@ -30,19 +71,25 @@ bool KinModel::initJoint(char *filename)
 	baseNode.parseXML(&doc);
 
 	XmlNode *node = baseNode.child;
-	i = 0;
-	while ( node )
-	{
-		node = node->child;
-		i++;
-	}
-	numJoints = i;
-	cerr << numJoints << endl;
+
+	numJoints = numJoint(node);
+	cerr << "Number of joints: " << numJoints << endl;
 	cerr << "###################################" << endl;
 
 	joints = new Joint[numJoints];
 
+	int index = 0;
 	node = baseNode.child;
+#if 1
+	addJoint(node, NULL, index);
+
+	cerr << "done." << endl;
+
+	for ( int i = 0 ; i < numJoints ; i++ )
+	{
+		cerr << joints[i].name << endl;
+	}
+#else
 	i = 0;
 	while ( node )
 	{
@@ -67,6 +114,7 @@ bool KinModel::initJoint(char *filename)
 		node = node->child;
 		i++;
 	}
+#endif
 }
 
 bool KinModel::initLink(char *filename)

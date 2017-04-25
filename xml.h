@@ -8,18 +8,19 @@ using namespace Eigen;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 using std::vector;
+#define JOINT_NAME_LEN (20)
 
 class XmlNode
 {
 public:
-	char name[20];
+	char name[JOINT_NAME_LEN];
 	VectorXd	rot;
 	VectorXd	pos;
 	VectorXd	com;
 	double		mass;
 
 	XmlNode(void);
-	XmlNode* sibling;
+	XmlNode *sibling;
 	XmlNode *child;
 
 	void parseXML(const TiXmlNode *parent);

@@ -4,8 +4,8 @@
 #include <boost/scoped_ptr.hpp>
 
 
-#define DOF		(9)
-#define LINKS	(10)
+#define DOF		(16)
+#define LINKS	(17)
 
 using namespace std;
 using namespace boost;

@@ -19,6 +19,7 @@ XmlNode::XmlNode(void)
 	com		= VectorXd::Zero(3);
 	mass	= 0;
 	child	= NULL;
+	sibling	= NULL;
 }
 void XmlNode::parseXML(const TiXmlNode *myXML)
 {
@@ -63,9 +64,21 @@ void XmlNode::parseXML(const TiXmlNode *myXML)
 			{
 				// Create New Joint Node
 				cerr << "Create New Node" << endl;
-				XmlNode *ch = new XmlNode;
-				ch->parseXML(myXML->FirstChild());
-				child = ch;
+				XmlNode *_ch = new XmlNode;
+				_ch->parseXML(myXML->FirstChild());
+
+				if ( child == NULL )
+				{
+					child = _ch;
+				}
+				else
+				{
+					XmlNode *_last = child;
+					cerr << "Child already exists" << endl;
+					while ( _last->sibling )
+						_last = _last->sibling;
+					_last->sibling = _ch;
+				}
 			}
 			else if ( strcmp(myXML->Value(), "jointName") == 0 )
 			{
