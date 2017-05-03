@@ -480,7 +480,7 @@ void periodicTask(void)
 		taoDNode const *end_effector_node_ = model->getNode(9);
 		jspace::Transform ee_transform;
 		model->computeGlobalFrame(end_effector_node_,
-			0.0, -0.05, 0.0, ee_transform);
+			0.0, -0.15, 0.0, ee_transform);
 		actual_ = ee_transform.translation();
 
 		ts1.checkElapsed(2);
@@ -493,7 +493,7 @@ void periodicTask(void)
 		
 		ts1.checkElapsed(3);
 
-		double kp = 100., kd = 10.0;
+		double kp = 100., kd = 50.0;
 
 		phi = UNc * ainv * UNc.transpose();
 		//XXXX hardcoded sigma threshold
@@ -515,7 +515,7 @@ void periodicTask(void)
 
 		desired_posture(3) = M_PI/6.;
 		desired_posture(5) = M_PI/2.;
-		desired_posture(10) = -M_PI/6.;
+		desired_posture(10) = -M_PI/12.;
 		desired_posture(12) = 0.;//M_PI/4.;
 
 		N1 = MatrixXd::Identity(DOF,DOF) - phi*J1star.transpose()*Lambda1*J1star;
@@ -525,14 +525,18 @@ void periodicTask(void)
 			0.0001,
 			Lambda2, 0);
 
-		tau1 =  J1star.transpose() * Lambda1 * (kp * ( desired_pos - actual_ ) - kd * J * fullJvel_);
+		tau1 =  J1star.transpose() * Lambda1 * kp * ( desired_pos - actual_ );
+		double mag = tau1.norm();
+//		if ( mag > 10. )
+//			tau1 = tau1 / mag*10.;
+		tau1 -=  J1star.transpose() * Lambda1 * kd * J * fullJvel_;
 	//	cout << "Lambda2 " << Lambda2.rows() << "x" << Lambda2.cols() << endl;
 	//	cout << "N1 " << N1.rows() << "x" << N1.cols() << endl;
 	//	cout << "vel " << body_state.position_.rows() << "x" << body_state.position_.cols() << endl;
 	//	cout << "UNcBar " << UNcBar.rows() << "x" << UNcBar.cols() << endl;
 	//	cout << "U " << U.rows() << "x" << U.cols() << endl;
 	//	tau2 =  UNcBar.transpose() * U.transpose() * Lambda2 * (kp * (-body_state.position_) - kd * body_state.velocity_);
-		tau2 =  J2star.transpose() * Lambda2 * (kp * ( desired_posture - body_state.position_) - kd * body_state.velocity_ - tau1);
+		tau2 =  J2star.transpose() * Lambda2 * (10.*kp * ( desired_posture - body_state.position_) - kd * body_state.velocity_ - tau1);
 	//	cout << "ainv " << ainv.rows() << "x" << ainv.cols() << endl;
 	//	tau		= tau1 + UNcBar.transpose() * grav;
 		tau		= tau1 + tau2 + UNcBar.transpose() * grav;

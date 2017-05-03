@@ -1087,7 +1087,7 @@ void MyWindow::
 cb_reset(Fl_Widget *widget, void *param)
 {
 	bSimul = false;
-	for ( int i = 0 ; i < 10 ; i++ )
+	for ( int i = 0 ; i < 17 ; i++ )
 		 q[i] = 0.;
 }
 

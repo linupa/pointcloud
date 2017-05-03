@@ -38,6 +38,13 @@
 			<radius> 0.06 </radius>
 		</linkNode>
 		<linkNode>
+			<linkName>torso 2-4</linkName>
+			<from> .2337,0.,0.18465 </from>
+			<to> .2337,0.,0.06 </to>
+			<index> 2 </index>
+			<radius> 0.06 </radius>
+		</linkNode>
+		<linkNode>
 			<linkName>upper arm</linkName>
 			<from> 0.03175,-0.27857,0. </from>
 			<to> 0.,0.,0. </to>
