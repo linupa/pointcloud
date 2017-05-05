@@ -1,22 +1,25 @@
 #ifndef __WBCRRT_H__
 #define __WBCRRT_H__
 
+#ifdef USE_WBC
 #include <boost/scoped_ptr.hpp>
+using namespace boost;
+#include <jspace/Model.hpp>
+#include <jspace/State.hpp>
+#include <jspace/test/sai_util.hpp>
+#include <jspace/pseudo_inverse.hpp>
+using namespace jspace;
+#endif
+#include <Eigen/Eigen>
 
 
 #define DOF		(16)
 #define LINKS	(17)
 
 using namespace std;
-using namespace boost;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
-#include <jspace/Model.hpp>
-#include <jspace/State.hpp>
-#include <jspace/test/sai_util.hpp>
-#include <jspace/pseudo_inverse.hpp>
-using namespace jspace;
 
 #include "rrt.hpp"
 #include "kin.h"
@@ -44,7 +47,9 @@ public:
 	MatrixXd &getProjection(void);
 	virtual double project( Node<DOF> * , double step, double max) const;
 
+#ifdef USE_WBC
 	static scoped_ptr<jspace::Model> model;
+#endif
 	static Node<DOF> *create(const VectorXd &min, const VectorXd &max);
 	static VectorXd	mins;
 	static VectorXd	maxs;

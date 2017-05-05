@@ -5,12 +5,7 @@
 #include "tinyxml.h"
 #include <sys/time.h>
 
-#include <jspace/Model.hpp>
-#include <jspace/State.hpp>
-#include <jspace/test/sai_util.hpp>
-#include <jspace/pseudo_inverse.hpp>
-#include <boost/scoped_ptr.hpp>
-
+#include "config.h"
 #include "wbcrrt.h"
 #include "prm.hpp"
 #include "xml.h"
@@ -35,19 +30,22 @@
 #include "model.h"
 
 #define CHECK_LIMIT
+#define TICK_SEC (1000)
 
 using namespace std;
-using namespace boost;
-using namespace jspace;
 
 typedef RRT<DOF> WbcRRT;
 
 static int win_width(800);
 static int win_height(600);
 static char win_title[100];
+#ifdef USE_WBC
 static scoped_ptr<jspace::Model> model;
 static scoped_ptr<jspace::Model> model_planning;
+#endif
+#ifdef USE_WBC
 State body_state(16, 16, 6);
+#endif
 
 KinModel myModel;
 
@@ -65,10 +63,13 @@ bool bRandom = false;
 int goalIdx = -1;
 bool bSend = false;
 extern VectorXd q;
-extern VectorXd q0;
+VectorXd q0;
+extern VectorXd disp_q1;
+extern VectorXd disp_q2;
 extern vector<VectorXd> r0;
 extern vector<VectorXd> qp1;
 extern vector<VectorXd> qp2;
+extern bool bPath;
 vector<double> dist;
 vector<double> distp;
 vector<double> d_t;
@@ -84,13 +85,38 @@ PRM<DOF> *prm;
 extern double *value;
 extern int seq_ui;
 
-Vector sentQ;
-Vector elbow_des;
-Vector elbow0;
-Vector elbow;
-Vector error;
+VectorXd sentQ;
+VectorXd elbow_des;
+VectorXd elbow0;
+VectorXd elbow;
+VectorXd error;
 
 VectorXd endeffector;
+
+VectorXd interpolate(const vector<VectorXd> &list, double seq)
+{
+	VectorXd ret;
+	
+	if ( list.size() )
+	{
+		int idx = (int)seq;
+		double ratio = seq - idx;
+		VectorXd q0, q1;
+
+		if ( idx < list.size()-1 )
+		{
+			q0 = list[idx];
+			q1 = list[idx+1];
+
+			ret = (1.-ratio) * q0 + ratio * q1;
+		}
+		else
+			ret = list[list.size()-1];
+	}
+
+	return ret;
+}
+
 
 void push(VectorXd dir);
 double getPotential(int mode, const VectorXd &contact, const WbcNode &node, const vector<VectorXd> &r0);
@@ -162,11 +188,13 @@ int main(int argc, char *argv[])
 	if ( !(loaded != (INIT_LINK|INIT_JOINT)) )
 		exit(-1);
 
-	q = VectorXd::Zero(myModel.numJoints);
+	disp_q1 = disp_q2 = q = VectorXd::Zero(myModel.numJoints);
 	endeffector = VectorXd::Zero(3);;
 	q0 = q;
 
+#ifdef USE_WBC
 	body_state = State(myModel.numJoints-1, myModel.numJoints-1, 6);
+#endif
 	cerr << "Model Init Done... " << endl;
 	r0.clear();
 	myModel.updateState(q0);
@@ -231,6 +259,7 @@ int main(int argc, char *argv[])
 	pthread_mutex_init( &model_mutex, NULL );
 	pthread_mutex_init( &link_mutex, NULL );
 
+#ifdef USE_WBC
 	model.reset(test::parse_sai_xml_file(robot_spec, false));
 	model->setConstraint("Dreamer_Torso");
 	
@@ -238,6 +267,7 @@ int main(int argc, char *argv[])
 
 	WbcNode::model.reset(test::parse_sai_xml_file(robot_spec, false));
 	WbcNode::model->setConstraint("Dreamer_Torso");
+#endif
 
 	pthread_create( &planning_thread, NULL, plan, NULL);
 
@@ -253,10 +283,12 @@ int main(int argc, char *argv[])
 	int ret = Fl::run();
 }
 
+#ifdef USE_WBC
 MatrixXd getJacobian(const Model &model)
 {
 	MatrixXd Jfull, J;
-	Vector actual_;
+	VectorXd actual_;
+
 	taoDNode const *end_effector_node_ = model.getNode(DOF);
 	jspace::Transform ee_transform;
 	model.computeGlobalFrame(end_effector_node_,
@@ -268,6 +300,7 @@ MatrixXd getJacobian(const Model &model)
 
 	return J;
 }
+#endif
 bool pushing = false;
 
 extern int push_type;
@@ -275,24 +308,25 @@ int qmap[] = {0,1,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
 Timestamp ts1("Period");
 void periodicTask(void)
 {
-	Vector tau1, tau2, tau;
-	Vector fullJpos_, fullJvel_;
-	Vector actual_;
-	Vector desired_posture = Vector::Zero(DOF);
+	VectorXd desired_posture = VectorXd::Zero(DOF);
+	VectorXd tau1, tau2, tau;
+	VectorXd fullJpos_, fullJvel_;
+	VectorXd actual_;
 	MatrixXd UNcBar;
 	MatrixXd phi;
 	MatrixXd phiinv; 
 	MatrixXd J1star;
 	MatrixXd Lambda1;
 	MatrixXd ainv;
-	Vector grav;
+	VectorXd grav;
 	MatrixXd Nc;
 	MatrixXd UNc;
 	MatrixXd U;
 	MatrixXd Jfull, J;
 	MatrixXd N1, Lambda2;
 	MatrixXd J2star;
-	Vector	ddq;
+	VectorXd	ddq;
+	double sec = (double)tickCount / TICK_SEC;
 
 
 	if ( desired_pos.rows() != 3 )
@@ -310,10 +344,10 @@ void periodicTask(void)
 //			fprintf(stderr, "%d data\n", msg.size);
 			for ( i = 0 ; i < DOF ; i++ )
 			{
-				q[qmap[i]] = pData[i];
+				disp_q1[qmap[i]] = pData[i];
 			}
 		//	cerr << fullJvel_(1) << " " << fullJvel_(2) << endl;
-			q[2] = q[1];
+			disp_q1[2] = disp_q1[1];
 			free(msg.data);
 		}
 
@@ -346,6 +380,45 @@ void periodicTask(void)
 
 			count++;
 		}
+		vector<VectorXd> *qp;
+		if ( bPath )
+		{
+			qp = &qp1;
+			glColor3f(1.0, 1.0, 0.8);
+		}
+		else
+		{
+			qp = &qp2;
+			glColor3f(0.8, 0.8, 0.8);
+		}
+		if ( qp->size() > 0 && eta.size() > 0 )
+		{
+			static int dest = 0;
+	//		seq	= (tickCount/2 ) % (3*qp->size()-1);
+	//		cerr << "sec: " << sec << endl;
+			if ( sec >= 20. )
+			{
+				seq = 0.;
+				pushing = false;
+			}
+			else if ( sec >= 10. )
+			{
+				seq	= (20. - sec ) / 10. * dest;
+				
+			}
+			else if ( sec < 5. )
+			{
+				int idx = (int)(sec*100.);
+				assert(idx < 500 );
+				seq = eta[idx];
+				dest = (int)seq;
+			}
+
+			disp_q1 = interpolate(*qp, seq);
+		}
+		else
+			pushing = false;
+#ifdef USE_WBC
 #if 0
 		for ( i = 0 ; i < DOF ; i++ )
 		{
@@ -353,11 +426,12 @@ void periodicTask(void)
 			body_state.velocity_(i) = 0.;
 		}
 #else
-		body_state.position_	= getQa(q);
+		body_state.position_	= getQa(disp_q1);
 		body_state.velocity_	= VectorXd::Zero(DOF);
 #endif
+#endif
 
-#if 1
+#ifdef USE_WBC
 		if ( !bPlanning )
 		{
 			WbcNode node;
@@ -386,7 +460,7 @@ void periodicTask(void)
 		}
 		else
 		{
-			elbow_des = Vector::Zero(3);
+			elbow_des = VectorXd::Zero(3);
 //			cerr << "Size " << sentQ.size() << endl;
 		}
 		pthread_mutex_unlock(&link_mutex);
@@ -402,58 +476,12 @@ void periodicTask(void)
 			time_log.push_back(tickCount);
 			pthread_mutex_unlock(&mutex);
 		}
-
-#if 0
-		if ( seq_ui == 0 && rrt->numNodes > 0 && bPlanning == false && pushing == false)
-		{
-			if ( error(0) > 0.02 && bPlanning == false && pushing == false)
-			{
-				cerr << "====================================" << endl;
-				cerr << " Push Forward " << error(0) << endl;
-				cerr << "====================================" << endl;
-				VectorXd dir = VectorXd::Zero(3);
-				dir(0) = 1;
-				push(dir);
-				pushing = true;
-				elbow_log.clear();
-				elbow_des_log.clear();
-				time_log.clear();
-			}
-			if ( error(1) < -0.02 && bPlanning == false && pushing == false)
-			{
-				cerr << "====================================" << endl;
-				cerr << " Push Right " << endl;
-				cerr << elbow.transpose() << " " << elbow0.transpose() << endl;
-				cerr << "====================================" << endl;
-				VectorXd dir = VectorXd::Zero(3);
-				dir(1) = -1;
-				push(dir);
-				pushing = true;
-				elbow_log.clear();
-				elbow_des_log.clear();
-				time_log.clear();
-			}
-			if ( error(2) > 0.02 && bPlanning == false && pushing == false)
-			{
-				cerr << "====================================" << endl;
-				cerr << " Push Up " << error(2) << endl;
-				cerr << elbow.transpose() << " " << elbow0.transpose() << endl;
-				cerr << "====================================" << endl;
-				VectorXd dir = VectorXd::Zero(3);
-				dir(2) = 1;
-				push(dir);
-				pushing = true;
-				elbow_log.clear();
-				elbow_des_log.clear();
-				time_log.clear();
-			}
-//		cerr << "PUSH " << bPlanning << " " << pushing << endl;
-		}
-#endif
+		tickCount++;
 	}
-	else
+	else // Simulation
 	{
 
+#ifdef USE_WBC
 		ts1.setBaseline();
 
 		model->update(body_state);
@@ -546,7 +574,7 @@ void periodicTask(void)
 	//	cout << "J1star " << J1star.rows() << "x" << J1star.cols() << endl;
 	//	cout << "Nc " << NcT.rows() << "x" << NcT.cols() << endl;
 	//	cout << "GRAV " << grav.rows() << "x" << grav.cols() << endl;
-	//	Vector ddq =  -ainv * NcT * grav;
+	//	VectorXd ddq =  -ainv * NcT * grav;
 		ddq = ainv * ( UNc.transpose()*tau - Nc.transpose() * grav );
 
 	//	cout << "ddt " << ddq.rows() << "x" << ddq.cols() << endl;
@@ -566,11 +594,12 @@ void periodicTask(void)
 #else
 		body_state.position_ = getQa(fullJpos_);
 		body_state.velocity_ = getQa(fullJvel_);
-		q						= fullJpos_;
+		disp_q1 = q			= fullJpos_;
 		endeffector				= actual_;
 #endif
 	//	cerr << fullJvel_(1) << " " << fullJvel_(2) << endl;
 		ts1.checkElapsed(5);
+#endif
 	}
 
 	{
@@ -578,6 +607,7 @@ void periodicTask(void)
 
 		if ( (count % 1000) == 0 )
 		{
+#ifdef USE_WBC
 			if ( bSimul )
 			{
 				cout << ts1;
@@ -588,12 +618,13 @@ void periodicTask(void)
 				cout << "full " << (fullJpos_*180./M_PI).transpose() << endl;
 				cout << "tau1 " << tau1.transpose() << endl;
 				cout << "tau2 " << tau2.transpose() << endl;
-				Vector ddx = J * ddq; // ainv * UNc.transpose() * tau;
+				VectorXd ddx = J * ddq; // ainv * UNc.transpose() * tau;
 				cout << "ddx " << ddx.transpose() << endl;
 				cout << "ddq " << ddq.transpose() << endl;
 				cout << "J " << J << endl;
 //				cout << "U " << U << endl;
 			}
+#endif
 		}
 		count++;
 	}
@@ -601,19 +632,7 @@ void periodicTask(void)
 	pthread_mutex_lock(&link_mutex);
 	if ( qp1.size() > 2 )
 	{
-		int idx = (int)seq;
-		double ratio = seq - idx;
-		VectorXd q0, q1, Q;
-
-		if ( idx < qp1.size()-1 )
-		{
-			q0 = qp1[idx];
-			q1 = qp1[idx+1];
-
-			Q = (1.-ratio) * q0 + ratio * q1;
-		}
-		else
-			Q = qp1[idx];
+		VectorXd Q = interpolate(qp1, seq);
 		sentQ = Q;
 	}
 	pthread_mutex_unlock(&link_mutex);
@@ -646,8 +665,8 @@ void periodicTask(void)
 #define STEP (M_PI*0.020) // Resolution 0.02PI = 3.6 deg
 //double mins[] = {	-80.,	-10,	-70,	 -10,	-60,	  0,	-20,	-40,	-40};
 //double maxs[] = {	 80.,	 40,	180,	130,	 60,	100,	200,	 40,	 40};
-Vector Mins;
-Vector Maxs;
+VectorXd Mins;
+VectorXd Maxs;
 // Nominal Joint Limits
 double mins[] = {	-90.,	-12,	
 					-80,	-25,	-85,	  0,	-48,	-60,	-60,
@@ -696,18 +715,20 @@ void *plan(void *)
 		rrt->nodes[rrt->numNodes++] = newNode;
 #else
 		rrt->reset();
-		rrt->nodes[0]->q = getQa(q); // body_state.position_;
+		rrt->nodes[0]->q = getQa(disp_q1); // body_state.position_;
 		for ( int i = 0 ; i < DOF ; i++ )
 		{
 			rrt->qs[0][i] = rrt->nodes[0]->q(i);
 		}
 		
+#ifdef USE_WBC
 		((WbcNode *)rrt->nodes[0])->getProjection();
+#endif
 #endif
 
 
 		int count = 0;
-		q0 = getQ(body_state.position_);
+		q0 = q; // getQ(body_state.position_);
 		r0.clear();
 
 		pthread_mutex_lock(&link_mutex);
@@ -739,6 +760,7 @@ void *plan(void *)
 					cerr << p->q.transpose() << endl;
 					cerr << "Actual " << p->actual.transpose() << endl;
 					cerr << *rrt << endl;
+					disp_q1 = getQ(p->q);
 
 					pthread_mutex_lock(&mutex);
 					qp1.clear();
@@ -805,7 +827,9 @@ void *plan(void *)
 					Q = getQ(q_plan);
 #endif
 					qp1.push_back(Q);
+#ifdef USE_WBC
 					((WbcNode *)path.newNodes[i])->getProjection();
+#endif
 //					cerr << getPotential(push_type, elbow0, (const WbcNode&)*(path.newNodes[i]), r0) << endl;
 
 					// Derive elbow location to get distance
@@ -890,17 +914,7 @@ void *plan(void *)
 						value2 = distp[idx];
 					}
 
-					VectorXd q0, q1, Q;
-
-					if ( idx < qp1.size()-1 )
-					{
-						q0 = qp1[idx];
-						q1 = qp1[idx+1];
-
-						Q = (1.-ratio) * q0 + ratio * q1;
-					}
-					else
-						Q = qp1[idx];
+					VectorXd Q = interpolate(qp1, eta[i]);
 
 					pthread_mutex_lock(&link_mutex);
 					myModel.updateState(Q);
@@ -943,7 +957,9 @@ void *plan(void *)
 					double val = getPotential(0, VectorXd::Zero(3), Q, r0);
 					cerr << "(" << val << ")"; 
 #endif
+#ifdef USE_WBC
 					((WbcNode *)path.nodes[i])->getProjection();
+#endif
 					cerr << getPotential(push_type, elbow0, (const WbcNode&)*(path.nodes[i]), r0) << endl;
 				}
 				pthread_mutex_unlock(&mutex);
@@ -964,9 +980,9 @@ void *plan(void *)
 template <int T>
 double project1( Node<T> *np )
 {
-	Vector dq0;
-	Vector dq;
-	Vector dst = np->q;
+	VectorXd dq0;
+	VectorXd dq;
+	VectorXd dst = np->q;
 
 	assert(np->q.rows() == T);
 
@@ -976,13 +992,15 @@ double project1( Node<T> *np )
 	bool violate = true;
 	for ( trial = 100 ; trial >= 0 ; trial-- )
 	{
+#ifdef USE_WBC
 		np->getProjection();
+#endif
 
 
 //	cerr << "New Node" << np->q.transpose()*180./M_PI << endl;
 
 
-		Vector diff1 = desired_pos - np->actual;
+		VectorXd diff1 = desired_pos - np->actual;
 		err = diff1.norm();
 
 //	cerr << p.q.transpose() << endl;
@@ -993,14 +1011,14 @@ double project1( Node<T> *np )
 
 		cerr << err << "->";
 
-		Vector modified;
+		VectorXd modified;
 //		cerr << "From  : " << p.q.transpose()<<endl;
 //		cerr << "Before: " << np->q.transpose()<<endl;
 //		modified = np->q + np->traction * diff1 + np->projection * diff2;
 		modified = np->q + np->traction * diff1;
 		np->q = modified;
 
-		Vector diff2 = prm->center - np->q;
+		VectorXd diff2 = prm->center - np->q;
 		for ( int i = 0 ; i < T ; i++ )
 		{
 			if ( diff2[i] > M_PI )
@@ -1039,7 +1057,7 @@ double project1( Node<T> *np )
 	cerr << "Found" << endl;
 
 #if 0
-	Vector diff = np->q - prm->center;
+	VectorXd diff = np->q - prm->center;
 	for ( int i = 0 ; i < T ; i++ )
 	{
 		if ( diff[i] > M_PI )
@@ -1053,8 +1071,8 @@ double project1( Node<T> *np )
 	MatrixXd weight = prm->weight;
 	for ( trial = 100 ; trial >= 0 && violate == true; trial-- )
 	{
-		Vector modified;
-		Vector diff2;
+		VectorXd modified;
+		VectorXd diff2;
 
 
 		np->getProjection();
@@ -1064,7 +1082,7 @@ double project1( Node<T> *np )
 		np->q = modified;
 
 		violate = false;
-		Vector q = np->q;
+		VectorXd q = np->q;
 		weight = prm->weight;
 		for ( int i = 0 ; i < T ; i++ )
 		{
@@ -1097,9 +1115,9 @@ template <int T>
 double project2( const Node<T> *_p, Node<T> *_np )
 {
 	WbcNode *p, *np;
-	Vector dq0;
-	Vector dq;
-	Vector dst;
+	VectorXd dq0;
+	VectorXd dq;
+	VectorXd dst;
 
 	p = (WbcNode *)_p;
 	np = (WbcNode *)_np;
@@ -1152,9 +1170,11 @@ double project2( const Node<T> *_p, Node<T> *_np )
 #endif
 //	cerr << "New Node" << np->q.transpose()*180./M_PI << endl;
 
+#ifdef USE_WBC
 	np->getProjection();
+#endif
 
-	Vector diff = desired_pos - np->actual;
+	VectorXd diff = desired_pos - np->actual;
 	double err = diff.norm();
 
 
@@ -1172,7 +1192,7 @@ double project2( const Node<T> *_p, Node<T> *_np )
 #if 1
 	else if ( err > 0.01 )
 	{
-		Vector modified;
+		VectorXd modified;
 //		cerr << "From  : " << p.q.transpose()<<endl;
 //		cerr << "Before: " << np.q.transpose()<<endl;
 		modified = np->q + np->traction * diff;
@@ -1341,7 +1361,7 @@ void intervention(void)
 	int i, j, num;
 	double ddmin[2] = {1e10, 1e10}, dmin;
 	int  idxmin[2] = {0};
-	Vector d, q;
+	VectorXd d, q;
 
 	num = rrt->numNodes;
 	cerr << "Check " << num << " nodes" << endl;

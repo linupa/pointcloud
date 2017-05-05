@@ -64,6 +64,7 @@ public:
 	Fl_Button *pushYButton;
 	Fl_Button *pushZButton;
 	Fl_Button *goalButton;
+	Fl_Button *interveneButton;
 	MySim *sim;
 	Fl_Value_Slider *mGroupSlider;
 	Fl_Value_Slider *mSizeSlider;
@@ -110,6 +111,7 @@ public:
 	static void cb_node(Fl_Widget *widget, void *param);
 
 	static void cb_goal(Fl_Widget *widget, void *param);
+	static void cb_intervene(Fl_Widget *widget, void *param);
 
 	static void timer_cb(void *param);
 };

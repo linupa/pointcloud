@@ -1,17 +1,24 @@
+#include <config.h>
+
+#ifdef USE_WBC
 #include <jspace/Model.hpp>
 #include <jspace/State.hpp>
 #include <jspace/test/sai_util.hpp>
 #include <jspace/pseudo_inverse.hpp>
 
 #include <boost/scoped_ptr.hpp>
+#endif
 
 #include "wbcrrt.h"
 #include "model.h"
 #define CHECK_LIMIT
 
 using namespace std;
+
+#ifdef USE_WBC
 using namespace boost;
 using namespace jspace;
+#endif
 
 extern VectorXd desired_pos;
 extern pthread_mutex_t	model_mutex;
@@ -19,7 +26,9 @@ extern pthread_mutex_t	link_mutex;
 extern VectorXd getQ(const VectorXd &uq);
 extern KinModel myModel;
 
+#ifdef USE_WBC
 scoped_ptr<jspace::Model> WbcNode::model;
+#endif
 
 VectorXd WbcNode::mins(DOF);
 VectorXd WbcNode::maxs(DOF);
@@ -120,6 +129,7 @@ WbcNode& WbcNode::operator=(const Node<DOF> &src)
 	return *this;
 }
 
+#ifdef USE_WBC
 extern State body_state;
 MatrixXd &WbcNode::getProjection(void)
 {
@@ -210,6 +220,7 @@ MatrixXd &WbcNode::getProjection(void)
 //	return Lambda2;
 	return projection;
 }
+#endif
 
 double WbcNode::project( Node<DOF> *_np, double step, double max ) const
 {
@@ -309,7 +320,10 @@ double WbcNode::project( Node<DOF> *_np, double step, double max ) const
 		return -1.;
 
 //	np->q	= this->q + (i-1)*step*ndq;
+
+#ifdef USE_WBC
 	np->getProjection();
+#endif
 //	np->q = np->q + np->traction * last_diff;
 
 #if 0

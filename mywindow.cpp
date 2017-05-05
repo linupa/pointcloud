@@ -2,12 +2,17 @@
 #include <math.h>
 #include <iostream>
 
+#include "config.h"
+
+
+#ifdef USE_WBC
 #include <jspace/Model.hpp>
 #include <jspace/State.hpp>
 #include <jspace/test/sai_util.hpp>
 #include <jspace/pseudo_inverse.hpp>
 
 #include <boost/scoped_ptr.hpp>
+#endif
 
 #include <FL/Fl.H>
 #include <FL/Fl_Double_Window.H>
@@ -56,7 +61,9 @@ extern int slice_idx;
 extern double gTorque[3];
 double phi;
 VectorXd q;
-VectorXd q0;
+VectorXd disp_q1;
+VectorXd disp_q2;
+
 vector<VectorXd> r0;
 
 vector<VectorXd> qp1;
@@ -96,6 +103,7 @@ extern VectorXd elbow;
 extern VectorXd endeffector;
 extern void push(VectorXd dir);
 extern void intervention(void);
+extern VectorXd interpolate(const vector<VectorXd> &list, double seq);
 
 //MySim::MySim(int xx, int yy, int width, int height) : Fl_Widget(xx, yy, width, height, "")
 MySim::MySim(int xx, int yy, int width, int height) : Fl_Gl_Window(xx, yy, width, height, "")
@@ -229,6 +237,7 @@ int MySim::handle(int e)
 }
 
 // OpenGL Drawing
+#define POLYGON_NUM (8)
 void drawBlock(float width, float height)
 {
 	float h_w = width/2.;
@@ -305,12 +314,12 @@ void drawCapsule(double *pos1, double *pos2, double radius)
 	glPushMatrix();
 	glTranslatef(pos1[0], pos1[1], pos1[2]);
 	glRotatef(th * 180. / M_PI , axis[0], axis[1], axis[2] );
-	gluCylinder(quadratic, radius, radius, length, 32, 32);
-	glutSolidSphere(radius, 32, 32);
+	gluCylinder(quadratic, radius, radius, length, POLYGON_NUM, POLYGON_NUM);
+	glutSolidSphere(radius, POLYGON_NUM, POLYGON_NUM);
 	glTranslatef(0., 0., length);
 	double plane[] = {1., 0., 0., 1.};
 	glClipPlane(GL_CLIP_PLANE0, plane);
-	glutSolidSphere(radius, 32, 32);
+	glutSolidSphere(radius, POLYGON_NUM, POLYGON_NUM);
 	glPopMatrix();
 }
 
@@ -495,69 +504,13 @@ extern double	min_pos[2], max_pos[2];
 //	XmlNode *pNode = &baseNode;
 //	XmlNode *pNode = baseNode.childs;
 
-	// Display Limbs with Cylinders of the Current State
-#if 0
-	glPushMatrix();
-	do {
-		glColor3f(color[index][0], color[index][1], color[index][2]);
-
-		glLineWidth(3.0);
-
-#if 0
-		glBegin(GL_LINES);
-		glVertex3f(0., 0., 0.);
-		glVertex3f(pNode->pos(0), pNode->pos(1), 0.);
-		glVertex3f(pNode->pos(0), pNode->pos(1), pNode->pos(2));
-		glEnd();
-#else
-		GLUquadricObj *quadratic;
-
-		quadratic = gluNewQuadric();
-		glPushMatrix();
-		glRotatef(-90.0f, 1.0f, 0.0f, 0.0f);
-		gluCylinder(quadratic,0.05f,0.05f,pNode->pos(1),32,32);
-		glPopMatrix();
-
-		quadratic = gluNewQuadric();
-		glPushMatrix();
-		glRotatef(90.0f, 0.0f, 1.0f, 0.0f);
-		gluCylinder(quadratic,0.05f,0.05f,pNode->pos(0),32,32);
-		glPopMatrix();
-
-		quadratic = gluNewQuadric();
-		glPushMatrix();
-		glRotatef(-90.0f, 0.0f, 0.0f, 1.0f);
-		gluCylinder(quadratic,0.05f,0.05f,pNode->pos(2),32,32);
-		glPopMatrix();
-#endif
-
-		glLineWidth(1.0);
-		glTranslatef(pNode->pos(0), pNode->pos(1), pNode->pos(2));
-		glRotatef(pNode->rot(3)*180./M_PI, pNode->rot(0), pNode->rot(1), pNode->rot(2));
-		glRotatef(q[index]*180./M_PI, 0., 0., 1.);
-		drawBlock(0.025, 0.05);
-#if 0
-		glPushMatrix();
-		glTranslatef(pNode->com(0), pNode->com(1), pNode->com(2));
-		glutSolidSphere(0.025,20,20);
-		glPopMatrix();
-#endif
-//		myModel.joints[index].theta = q[index];
-		index ++;
-
-//		Joint link1;
-//		link1.setRot(pNode->rot.block(0,0,3,1), pNode->rot(3));
-	}
-	while (pNode = pNode->childs);
-	glPopMatrix();
-#endif
-
 	VectorXd r0 = VectorXd::Zero(3);
 	double mat[16] = {0.};
 
 	// Draw Skeleton of the Current State
 	if ( goalIdx <= 0 )
 	{
+		glColor3f(1.0, 1.0, 1.0);
 		pthread_mutex_lock(&link_mutex);
 		myModel.updateState(q);
 		for ( i = 0 ; i < myModel.numLinks ; i++ )
@@ -569,7 +522,11 @@ extern double	min_pos[2], max_pos[2];
 
 			drawCapsule(r0, r, link.radius);
 		}
+		glColor3f(1.0, 0.0, 0.0);
+		drawSphere(myModel.joints[3].getGlobalPos(VectorXd::Zero(3)), 0.03, 20);
+		drawSphere(myModel.joints[5].getGlobalPos(VectorXd::Zero(3)), 0.03, 20);
 		pthread_mutex_unlock(&link_mutex);
+
 	}
 
 	glColor3f(1.0, 0.0, 0.0);
@@ -577,79 +534,9 @@ extern double	min_pos[2], max_pos[2];
 	unit(0) = 1.;
 
 	pthread_mutex_lock(&mutex);
-	tickCount++;
 	vector<VectorXd> *qp;
 
-	if ( bPath )
-	{
-		qp = &qp1;
-		glColor3f(1.0, 1.0, 0.8);
-	}
-	else
-	{
-		qp = &qp2;
-		glColor3f(0.8, 0.8, 0.8);
-	}
 
-//	if ( (tickCount % 33) == 0)
-//		cerr << "tickCount " << tickCount;
-
-	if ( qp->size() > 0 && eta.size() > 0 )
-	{
-		double sec = (double)tickCount * 0.03;
-		static int dest = 0;
-//		seq	= (tickCount/2 ) % (3*qp->size()-1);
-//		cerr << "sec: " << sec << endl;
-		if ( sec >= 20. )
-		{
-			seq = 0.;
-			pushing = false;
-		}
-		else if ( sec >= 10. )
-		{
-			seq	= (20. - sec ) / 10. * dest;
-			
-		}
-		else if ( sec < 5. )
-		{
-			int idx = (int)(sec*100.);
-			assert(idx < 500 );
-			seq = eta[idx];
-			dest = (int)seq;
-
-			if ( elbow_log.size() > 0 )
-			{
-				if (elbow_log.size() != elbow_des_log.size())
-				{
-					cerr << elbow_log.size() << "!=" <<  elbow_des_log.size() << endl;
-					assert(0);
-				}
-				for ( int i = 0  ; i < elbow_log.size() ; i++ )
-				{
-					Vector elbow = elbow_log[i];
-					Vector elbow_des = elbow_des_log[i];
-
-					double err = (elbow - elbow0).norm();
-					cerr << time_log[i] << " " << seq << " " << elbow[0] << " " << elbow[1] << " " << elbow[2] << " " << err << "  ";
-
-					err = (elbow_des - elbow0).norm();
-					cerr << elbow_des[0] << " " << elbow_des[1] << " " << elbow_des[2] << " " << err << endl;
-					time_log.clear();
-					elbow_log.clear();
-					elbow_des_log.clear();
-				}
-			}
-		}
-
-		if ( !( seq >= 0 && seq <= qp->size() - 1) )
-		{
-			cerr << seq << " " << qp->size() << endl;
-			assert(0);
-		}
-//		assert( seq >= 0 && seq <= qp->size() - 1);
-	}
-	else
-		pushing = false;
 	if ( seq_ui > 0 )
 	{
 		seq = seq_ui-1;
@@ -658,66 +545,25 @@ extern double	min_pos[2], max_pos[2];
 	VectorXd Q = q;
 
 
-	if ( qp->size() )
-	{
-		int idx = (int)seq;
-		double ratio = seq - idx;
-		VectorXd q0, q1;
-
-		if ( idx < qp->size()-1 )
-		{
-			q0 = (*qp)[idx];
-			q1 = (*qp)[idx+1];
-
-			Q = (1.-ratio) * q0 + ratio * q1;
-		}
-		else
-			Q = (*qp)[idx];
-	}
+//	if ( qp->size() > 2 )
+//	{
+//		Q = interpolate(*qp, seq);
+//	}
 	if ( prm->numNodes > 0 && node_id > 0 )
 		Q = getQ(prm->nodes[node_id-1]->q);
 
 	pthread_mutex_unlock(&mutex);
 
 //	for ( ; it != qp->end() ; it++ )
-	if ( qp->size() > 0 )
+//	if ( qp->size() > 0 )
 	{
 //		cerr << seq << " / " << qp->size() << endl;
 #if 0
-		index = 0;
-		pNode = baseNode.childs;
-		glPushMatrix();
-		do {
-
-			glLineWidth(3.0);
-			glBegin(GL_LINES);
-			glVertex3f(0., 0., 0.);
-			glVertex3f(pNode->pos(0), pNode->pos(1), 0.);
-			glEnd();
-
-			glBegin(GL_LINES);
-			glVertex3f(pNode->pos(0), pNode->pos(1), 0.);
-			glVertex3f(pNode->pos(0), pNode->pos(1), pNode->pos(2));
-			glEnd();
-
-			glLineWidth(1.0);
-			glTranslatef(pNode->pos(0), pNode->pos(1), pNode->pos(2));
-			glRotatef(pNode->rot(3)*180./M_PI, pNode->rot(0), pNode->rot(1), pNode->rot(2));
-			glRotatef(Q(index)*180./M_PI, 0., 0., 1.);
-			drawBlock(0.025, 0.05);
-			glPushMatrix();
-			glTranslatef(pNode->com(0), pNode->com(1), pNode->com(2));
-	//		glutSolidSphere(0.025,20,20);
-			glPopMatrix();
-			index ++;
-		}
-		while (pNode = pNode->childs);
-		glPopMatrix();
 #endif
 
 		// Draw Skeleton of Plan
 		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(Q);
+		myModel.updateState(disp_q1);
 
 		for ( i = 0 ; i < myModel.numLinks ; i++ )
 		{
@@ -725,17 +571,19 @@ extern double	min_pos[2], max_pos[2];
 			Link link = myModel.localLinks[i];
 			VectorXd r0	= myModel.joints[link.index].getGlobalPos(link.from);
 			VectorXd r	= myModel.joints[link.index].getGlobalPos(link.to);
-			if ( goalIdx <= 0 )
+//			if ( goalIdx <= 0 )
 			{
 				glBegin(GL_LINES);
 				glVertex3f(r(0), r(1), r(2));
 				glVertex3f(r0(0), r0(1), r0(2));
 				glEnd();
 			}
+#if 0
 			else
 			{
 				drawCapsule(r0, r, link.radius);
 			}
+#endif
 		}
 		pthread_mutex_unlock(&link_mutex);
 
@@ -744,7 +592,7 @@ extern double	min_pos[2], max_pos[2];
 #if 1
 		VectorXd r, r1;
 		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(Q);
+		myModel.updateState(disp_q1);
 		for ( i = 0 ; i < DOF+1 ; i++ )
 		{
 			r = myModel.joints[i].getGlobalPos(myModel.joints[i].com);
@@ -758,6 +606,7 @@ extern double	min_pos[2], max_pos[2];
 			drawSphere(r, 0.02, 20);
 #endif
 		}
+
 
 		r = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
 		VectorXd hand = VectorXd::Zero(3);
@@ -782,6 +631,10 @@ extern double	min_pos[2], max_pos[2];
 	glPopMatrix();
 #endif
 	
+	//////////////////////////////////
+	// Debugging purpose
+	//////////////////////////////////
+	// Show the elbow position error
 	glColor3f(0.0, 1.0, 0.0);
 	drawSphere(elbow0, 0.020,20);
 
@@ -795,15 +648,16 @@ extern double	min_pos[2], max_pos[2];
 	glVertex3f(elbow(0), elbow(1), elbow(2));
 	glEnd();
 
+	// Show end effector position
 	glColor3f(0.,1.,0.);
 	drawSphere(endeffector, 0.025, 20);
 
+	// Show desired end effector position
 	glPushMatrix();
 	glColor3f(1.,0.,0.);
 	glTranslatef(.4, -.2, .2);
 	glutSolidSphere(0.025,20,20);
 	glPopMatrix();
-
 
 //	fprintf(stderr, "%f %f %f %f %f %f\n", torque[0], torque[1], torque[2], force[0], force[1], force[2]); 
 	// Draw Human Posture
@@ -825,19 +679,20 @@ extern double	min_pos[2], max_pos[2];
 	}
 #endif
 	
+	// Intevention location
 	glColor3f(0.0, 1.0, 0.0);
 	drawSphere(gGoal, 0.05, 100);
 
-	glLineWidth(1.0);
 
 	// Floor 
+	glLineWidth(1.0);
 	glPushMatrix();
 	glRotatef(phi*180./M_PI, 0., 0., 1.);
 	double h = -0.5;
 	for ( i = -10 ; i <= 10 ; i++ )
 	{
 		glLineWidth(1.0);
-		glColor3f(1., 1., 1.);
+		glColor3f(.3, .3, .3);
 
 		glPushMatrix();
 		glBegin(GL_LINES);
@@ -891,6 +746,8 @@ MyWindow(int width, int height, const char * title)
     pushZButton->callback(cb_pushz, this); 
     goalButton = new Fl_Button(5, height - 35, 100, 30, "&Goal"); 
     goalButton->callback(cb_goal, this); 
+    interveneButton = new Fl_Button(5, height - 35, 100, 30, "&Intervene"); 
+    interveneButton->callback(cb_intervene, this); 
 
 	printf("WIN: %p\n", this);
     quitButton = new Fl_Button(width - 105, height - 35, 100, 30, "&Quit"); 
@@ -969,6 +826,7 @@ resize(int x, int y, int w, int h)
 	mHighlightSlider->resize(w-40, 10, 30, h-60);
 
 	goalButton->resize(		w-375,	h - 105, 70, 25);
+	interveneButton->resize(		w-375,	h - 70, 70, 25);
 	pushXButton->resize(	w-300,	h - 105, 70, 25);
 	pushYButton->resize(	w-300,	h - 70, 70, 25);
 	pushZButton->resize(	w-300,	h - 35, 70, 25);
@@ -982,8 +840,8 @@ resize(int x, int y, int w, int h)
 
 }
 
-extern Vector Mins;
-extern Vector Maxs;
+extern VectorXd Mins;
+extern VectorXd Maxs;
 
 void MyWindow::
 timer_cb(void * param)
@@ -1168,7 +1026,9 @@ cb_seq(Fl_Widget *widget, void *param)
 		WbcNode node;
 
 		node.q = getQa(Q);
+#ifdef USE_WBC
 		node.getProjection();
+#endif
 
 		getPotentialVerbose = true;
 		double val = getPotential(pushType, contact, node, r0);
@@ -1203,7 +1063,7 @@ cb_goal(Fl_Widget *widget, void *param)
 {
 	int i;
 	Vector3d goal(3);
-#if 0
+#if 0 // Random goal position
 	double bound[3][2] = {
 	{-0.3,0.3}, {-0.3,0.3}, {0,.5}
 	};
@@ -1212,7 +1072,7 @@ cb_goal(Fl_Widget *widget, void *param)
 	{
 		goal(i) = bound[i][0] + (double)rand() * (bound[i][1] - bound[i][0]) / RAND_MAX;
 	}
-#else
+#else // Predefined goal position
 	static int idx = 0;
 
 	goal(0) = goals[idx][0];
@@ -1222,7 +1082,11 @@ cb_goal(Fl_Widget *widget, void *param)
 #endif
 
 	gGoal = goal;
+}
 
+void MyWindow::
+cb_intervene(Fl_Widget *widget, void *param)
+{
  	intervention();
 }
 
