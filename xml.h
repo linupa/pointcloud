@@ -35,6 +35,7 @@ public:
 	int			index;
 	double		radius;
 	double		length;
+	VectorXi	neighbor;
 
 	XmlLinkNode(void);
 	vector<XmlLinkNode *> linkList;

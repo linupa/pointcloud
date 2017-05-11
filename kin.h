@@ -41,8 +41,10 @@ public:
 	void		setRot(VectorXd quat);
 	void		setRot(VectorXd axis, double deg);
 	Joint 		&operator=(const Joint &src);
+	Joint 		&operator=(const double theta);
 	double		setTheta(double theta_);
 	double		getTheta(void);
+	static bool	isAdjacent(const Joint &j1, const Joint &j2);
 
 private:
 	double		theta;
@@ -134,6 +136,7 @@ class Link
 	pos3D	to;
 	double	radius;
 	double	length;
+	VectorXi neighbor;
 
 	static  double getDistance( Link &p1, Link &p2 );
 };

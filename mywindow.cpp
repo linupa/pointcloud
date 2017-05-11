@@ -25,6 +25,7 @@
 #include "kin.h"
 #include "prm.hpp"
 #include "model.h"
+#include "Octree.h"
 
 using Eigen::MatrixXd;
 
@@ -45,6 +46,7 @@ static double dt = 0.001;
 double x_org;
 double y_org;
 double scale;
+int		octree_id = 0;
 extern int	group_threshold;
 extern bool gTrack;
 extern bool gShowBase;
@@ -63,6 +65,7 @@ double phi;
 VectorXd q;
 VectorXd disp_q1;
 VectorXd disp_q2;
+extern int numSamples;
 
 vector<VectorXd> r0;
 
@@ -81,6 +84,7 @@ extern void periodicTask(void);
 extern pthread_mutex_t	mutex;
 extern pthread_mutex_t	link_mutex;
 extern bool pushing;
+extern Octree *base_octree[20];
 
 // Updated in draw every 30msec
 // Reset when pushed
@@ -89,6 +93,14 @@ int tickCount = 0;
 double seq; 
 int seq_ui = 0;
 int node_id = 0;
+int sample_ui = 0;
+int link_ui = 0;
+int link2_ui = 0;
+int num_alpha = 0;
+int		link_a[100];
+double alpha[100];
+int		link_b[100];
+double beta[100];
 
 //extern vector<Link>	myLocalLink;
 //extern vector<Link>	myGlobalLink;
@@ -409,6 +421,19 @@ void drawSphere(const VectorXd  &pos, double radius, int numPoly)
 	drawSphere(_pos, radius, numPoly);
 }
 
+void drawOccupancy(Octree *tree)
+{
+	OctreeEntry *entry = tree->entry;
+
+	if ( entry == NULL || !tree->leaf )
+		return;
+
+	glPushMatrix();
+	glTranslatef(tree->x, tree->y, tree->z);
+	drawBlock(tree->len*2, tree->len*2);
+	glPopMatrix();
+}
+
 
 
 
@@ -484,7 +509,7 @@ extern double	min_pos[2], max_pos[2];
 
 
 
-	double color[15][3] = { 
+	double color[18][3] = { 
 		{1.,0., 0.},
 		{0.,1., 0.},
 		{0.,0., 1.},
@@ -497,7 +522,12 @@ extern double	min_pos[2], max_pos[2];
 		{0.5,1., 0.5},
 		{0.5,1., 0.5},
 		{0.5,1., 0.5},
-		{0.5,1., 0.5}
+		{0.5,1., 0.5},
+		{1.,0., 0.},
+		{0.,1., 0.},
+		{0.,0., 1.},
+		{1.,1., 0.},
+		{1.,0., 1.},
 	};
 
 	int index = 0;
@@ -508,11 +538,11 @@ extern double	min_pos[2], max_pos[2];
 	double mat[16] = {0.};
 
 	// Draw Skeleton of the Current State
-	if ( goalIdx <= 0 )
+//	if ( goalIdx <= 0 )
 	{
 		glColor3f(1.0, 1.0, 1.0);
 		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(q);
+		myModel.updateState(disp_q1);
 		for ( i = 0 ; i < myModel.numLinks ; i++ )
 		{
 			Link	link = myModel.localLinks[i];
@@ -563,10 +593,31 @@ extern double	min_pos[2], max_pos[2];
 
 		// Draw Skeleton of Plan
 		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(disp_q1);
+		myModel.updateState(disp_q2);
+		myModel.checkCollision();
 
+		
 		for ( i = 0 ; i < myModel.numLinks ; i++ )
 		{
+			if ( myModel.collision[i] >= 0 )
+			{
+				glLineWidth(3.0);
+				glColor3f(1.,0.,0.);
+			}
+			else
+			{
+				glColor3f(1.,1.,1.);
+				glLineWidth(1.0);
+			}
+
+			if ( i == link_ui )
+			{
+				glLineWidth(6.0);
+			}
+			else if ( i == link2_ui )
+			{
+				glLineWidth(6.0);
+			}
 //			Link link = myLocalLink[i];
 			Link link = myModel.localLinks[i];
 			VectorXd r0	= myModel.joints[link.index].getGlobalPos(link.from);
@@ -585,14 +636,44 @@ extern double	min_pos[2], max_pos[2];
 			}
 #endif
 		}
+
+		if ( num_alpha > 0 )
+		{
+			for ( i = 0 ; i < num_alpha ; i++ )
+			{
+				double a, b;
+				VectorXd x[4], p, q;
+				Link l1, l2;
+
+				a = alpha[i];
+				b = beta[i];
+				l1 = myModel.localLinks[link_a[i]];
+				l2 = myModel.localLinks[link_b[i]];
+				x[0] = myModel.joints[l1.index].getGlobalPos(l1.from);
+				x[1] = myModel.joints[l1.index].getGlobalPos(l1.to);
+				x[2] = myModel.joints[l2.index].getGlobalPos(l2.from);
+				x[3] = myModel.joints[l2.index].getGlobalPos(l2.to);
+
+				p = x[0] + a * (x[1] - x[0]);
+				q = x[2] + b * (x[3] - x[2]);
+				
+				glColor3f(0.0, 1.0, 0.0);
+				glLineWidth(1.0);
+				glBegin(GL_LINES);
+				glVertex3f(p(0), p(1), p(2));
+				glVertex3f(q(0), q(1), q(2));
+				glEnd();
+			}
+		}
 		pthread_mutex_unlock(&link_mutex);
 
 
 		// Draw Sphere on CoM of Each Limb
 #if 1
+		glLineWidth(1.0);
 		VectorXd r, r1;
 		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(disp_q1);
+		myModel.updateState(disp_q2);
 		for ( i = 0 ; i < DOF+1 ; i++ )
 		{
 			r = myModel.joints[i].getGlobalPos(myModel.joints[i].com);
@@ -683,6 +764,18 @@ extern double	min_pos[2], max_pos[2];
 	glColor3f(0.0, 1.0, 0.0);
 	drawSphere(gGoal, 0.05, 100);
 
+	unsigned int octree_mask = 0;
+	glLineWidth(1.0);
+	if ( octree_id == 20 )
+		octree_mask = 0xffffffff;
+	else
+		octree_mask = 1<<octree_id;
+	for ( int i = 0 ; i < 16 ; i++ )
+	{
+		glColor3f(color[i][0], color[i][1], color[i][2]);
+		if ( octree_mask & (1<<i) )
+			base_octree[i]->callBack(drawOccupancy);
+	}
 
 	// Floor 
 	glLineWidth(1.0);
@@ -755,15 +848,15 @@ MyWindow(int width, int height, const char * title)
 
 	mGroupSlider = new Fl_Value_Slider( 10, height - 30, width / 4 - 100, 30, "");
 	mGroupSlider->type(FL_HORIZONTAL);
-	mGroupSlider->bounds(0., (double)1000.);
-	mGroupSlider->callback(cb_quit, this);
+	mGroupSlider->bounds(0., (double)20.);
+	mGroupSlider->callback(cb_group, this);
 	mGroupSlider->step(1.);
 	mGroupSlider->value(0);
 
 	mSizeSlider = new Fl_Value_Slider( 10, height - 30, width / 4 - 100, 30, "");
 	mSizeSlider->type(FL_HORIZONTAL);
 	mSizeSlider->bounds(1., 400.);
-	mSizeSlider->callback(cb_quit, this);
+	mSizeSlider->callback(cb_link2, this);
 	mSizeSlider->step(1.);
 	mSizeSlider->value(0.); //window_size);
 
@@ -783,7 +876,7 @@ MyWindow(int width, int height, const char * title)
 
 	mNodeSlider = new Fl_Value_Slider( width / 4 + 20, height - 30, width / 4 - 100, 30, "");
 	mNodeSlider->type(FL_HORIZONTAL);
-	mNodeSlider->bounds(-3., 0.);
+	mNodeSlider->bounds(0., 100.);
 	mNodeSlider->step(1.0);
 	mNodeSlider->callback(cb_node, this);
 	mNodeSlider->value(0);
@@ -798,7 +891,7 @@ MyWindow(int width, int height, const char * title)
 	mHighlightSlider = new Fl_Value_Slider( 10, height - 35, width / 4 - 100, 30, "");
 	mHighlightSlider->type(FL_VERTICAL);
 	mHighlightSlider->bounds(0., (double)1080.-1.);
-	mHighlightSlider->callback(cb_quit, this);
+	mHighlightSlider->callback(cb_highlight, this);
 	mHighlightSlider->step(1.);
 	mHighlightSlider->value(0);
 
@@ -907,7 +1000,8 @@ timer_cb(void * param)
 		qp = &qp2;
 
 	reinterpret_cast<MyWindow*>(param)->mSeqSlider->bounds(0., (double)(qp->size()));
-	reinterpret_cast<MyWindow*>(param)->mNodeSlider->bounds(0., (double)(prm->numNodes));
+//	reinterpret_cast<MyWindow*>(param)->mNodeSlider->bounds(0., (double)(prm->numNodes));
+	reinterpret_cast<MyWindow*>(param)->mHighlightSlider->bounds(0., (double)numSamples);
 
 	Fl::repeat_timeout(dt, // gets initialized within tickCount()
 			   timer_cb,
@@ -940,6 +1034,21 @@ cb_speed(Fl_Widget *widget, void *param)
 	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
 	speed = pSlider->value();
 }
+
+void MyWindow::
+cb_group(Fl_Widget *widget, void *param)
+{
+	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
+	octree_id = (int)pSlider->value();
+}
+
+void MyWindow::
+cb_highlight(Fl_Widget *widget, void *param)
+{
+	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
+	sample_ui = (int)pSlider->value();
+}
+
 
 void MyWindow::
 cb_reset(Fl_Widget *widget, void *param)
@@ -1040,12 +1149,24 @@ cb_seq(Fl_Widget *widget, void *param)
 }
 
 void MyWindow::
+cb_link2(Fl_Widget *widget, void *param)
+{
+	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
+	link2_ui = (int)pSlider->value();
+}
+
+void MyWindow::
 cb_node(Fl_Widget *widget, void *param)
 {
+#if 0
 	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
 	node_id = (int)pSlider->value();
 	if ( node_id > 0 )
 		cerr <<  prm->nodes[node_id-1]->q.transpose()*180./M_PI << endl;
+#else
+	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
+	link_ui = (int)pSlider->value();
+#endif
 }
 
 double goals[][3] =

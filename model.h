@@ -12,6 +12,7 @@ public:
 
 	Link* localLinks;
 	Link* globalLinks;
+	int* collision;
 	Joint* joints;
 
 	bool initJoint(char *filename);
@@ -20,6 +21,7 @@ public:
 	int numJoint(const XmlNode *node);
 	void updateState(double *states);
 	void updateState(VectorXd &states);
+	bool checkCollision(void);
 	~KinModel(void);
 };
 

@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 
 <dynworld>
-
   <baseNode>
     <controller>2</controller>
     <gravity>0, 0, -9.81</gravity>

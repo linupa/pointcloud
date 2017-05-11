@@ -9,6 +9,7 @@
 #include "wbcrrt.h"
 #include "prm.hpp"
 #include "xml.h"
+#include "Octree.h"
 
 #include <GL/gl.h>
 #include <GL/glu.h>
@@ -53,6 +54,8 @@ Vector3d gGoal;
 vector<VectorXd> elbow_log;
 vector<VectorXd> elbow_des_log;
 vector<double>   time_log;
+Octree *base_octree[20];
+
 //void dump_to_stdout( TiXmlNode* pParent, unsigned int indent = 0);
 void *plan(void *);
 
@@ -82,8 +85,11 @@ extern double seq;
 //vector<Link>	myGlobalLink;
 WbcRRT *rrt;
 PRM<DOF> *prm;
+void addToOctree(WbcNode *node);
 extern double *value;
 extern int seq_ui;
+extern int sample_ui;
+int numSamples = 0;
 
 VectorXd sentQ;
 VectorXd elbow_des;
@@ -268,6 +274,18 @@ int main(int argc, char *argv[])
 	WbcNode::model.reset(test::parse_sai_xml_file(robot_spec, false));
 	WbcNode::model->setConstraint("Dreamer_Torso");
 #endif
+//	WbcNode::callbackAdd = NULL;
+
+	for ( int i = 0 ; i < 20 ; i++ )
+	{
+		base_octree[i] = new Octree;
+		base_octree[i]->x = 0.;
+		base_octree[i]->y = 0.;
+		base_octree[i]->z = 0.;
+		base_octree[i]->len = 1.;
+	}
+
+	WbcNode::callbackAdd = (WbcNode::CALLBACK)addToOctree;
 
 	pthread_create( &planning_thread, NULL, plan, NULL);
 
@@ -277,6 +295,7 @@ int main(int argc, char *argv[])
 	pCmdComm = new Comm("192.168.1.110", CMD_PORT, 20000);
 
 	MyWindow win(win_width, win_height, "test");
+
 
 	periodicTask();
 
@@ -418,6 +437,10 @@ void periodicTask(void)
 		}
 		else
 			pushing = false;
+
+		if ( sample_ui > 0 && sample_ui <= rrt->numNodes )
+			disp_q2 = getQ(rrt->nodes[sample_ui - 1]->q);
+
 #ifdef USE_WBC
 #if 0
 		for ( i = 0 ; i < DOF ; i++ )
@@ -703,6 +726,9 @@ void *plan(void *)
 	{
 		int next_count = 1000;
 
+		//////////////////////////////////
+		// Start generating sampling tree
+		//////////////////////////////////
 		rrt = new WbcRRT(Mins, Maxs, STEP);
 		rrt->nodeCreator = WbcNode::create;
 		prm->init();
@@ -742,6 +768,7 @@ void *plan(void *)
 
 		fprintf(stderr, "Start Planning... %d,%d\n", rrt->numNodes, rrt->numEdges);
 		cerr << q0.transpose() << endl;
+		numSamples = 0;
 		while (bPlan)
 		{
 			bPlanning = true;
@@ -760,7 +787,7 @@ void *plan(void *)
 					cerr << p->q.transpose() << endl;
 					cerr << "Actual " << p->actual.transpose() << endl;
 					cerr << *rrt << endl;
-					disp_q1 = getQ(p->q);
+					disp_q2 = getQ(p->q);
 
 					pthread_mutex_lock(&mutex);
 					qp1.clear();
@@ -774,6 +801,7 @@ void *plan(void *)
 		}
 		bPlanning = false;
 		pushing = false;
+		numSamples = rrt->numNodes;
 
 		cerr << "Total " << rrt->numNodes << " added" << endl;
 		bRandom = false;
@@ -1403,3 +1431,39 @@ void intervention(void)
 	tickCount = 0;
 }
 
+class TaskCell : public OctreeEntry
+{
+	vector<int>	qs;
+	int			index;
+	virtual void absorb(OctreeEntry *other);
+};
+void TaskCell::absorb(OctreeEntry *other)
+{
+}
+
+void addToOctree(WbcNode *node)
+{
+	VectorXd x;
+	VectorXd q;
+
+	q = getQ(node->q);
+	
+//	cerr << "add to octree" << node->q << endl;
+
+	if ( node == NULL )
+		return;
+
+	pthread_mutex_lock(&link_mutex);
+	myModel.updateState(q);
+
+	for ( int i = 1 ; i < 16 ; i++ )
+	{
+		x = myModel.joints[i].getGlobalPos(VectorXd::Zero(3));
+		TaskCell *cell = new TaskCell;
+		cell->x = x[0];
+		cell->y = x[1];
+		cell->z = x[2];
+		base_octree[i-1]->addEntry(cell, 5);
+	}
+	pthread_mutex_unlock(&link_mutex);
+}

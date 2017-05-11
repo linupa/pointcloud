@@ -25,6 +25,7 @@ extern pthread_mutex_t	model_mutex;
 extern pthread_mutex_t	link_mutex;
 extern VectorXd getQ(const VectorXd &uq);
 extern KinModel myModel;
+extern void addToOctree(WbcNode &node);
 
 #ifdef USE_WBC
 scoped_ptr<jspace::Model> WbcNode::model;

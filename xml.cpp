@@ -254,6 +254,26 @@ void XmlLinkNode::parseXML(const TiXmlNode *myXML)
 				cerr << "To " << endl << v << endl;
 				to = v;
 			}
+			else if ( strcmp(myXML->Value(),"neighbor") == 0 )
+			{
+				int i = 0;
+				char name[50], *t;
+				strcpy(name, myXML->FirstChild()->Value());
+				vector<int>  vv;
+
+				vv.clear();
+				t = strtok(name, ", ");
+				while ( t != NULL )
+				{
+					vv.push_back( atoi(t) );
+					t = strtok(NULL, ", ");
+				}
+
+				neighbor = VectorXi::Zero(vv.size());
+				for ( i = 0 ; i < vv.size() ; i++ )
+					neighbor(i) = vv[i];
+				cerr << "Neighbor " << endl << neighbor.transpose() << endl;
+			}
 			else if ( strcmp(myXML->Value(),"index") == 0 )
 			{
 				int i = 0;

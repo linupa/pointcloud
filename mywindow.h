@@ -77,7 +77,7 @@ public:
 
 
 	static void cb_group(Fl_Widget *widget, void *param);
-	static void cb_size(Fl_Widget *widget, void *param);
+	static void cb_link2(Fl_Widget *widget, void *param);
 	static void cb_floor(Fl_Widget *widget, void *param);
 	static void cb_phi(Fl_Widget *widget, void *param);
 

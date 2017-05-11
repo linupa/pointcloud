@@ -3,6 +3,13 @@
 #include "xml.h"
 
 using namespace std;
+extern int link_ui;
+extern int link2_ui;
+extern int		link_a[100];
+extern double alpha[100];
+extern int		link_b[100];
+extern double beta[100];
+extern int num_alpha;
 
 void KinModel::addJoint(const XmlNode *node, Joint *parent, int &index)
 {
@@ -57,7 +64,7 @@ bool KinModel::initJoint(char *filename)
 		robot_spec = filename;
 		loaded = doc.LoadFile();
 
-		cerr << "Load XML File " << loaded << endl;
+		cerr << "Load XML File " << filename << " " << loaded << endl;
 	}
 	catch (int e)
 	{
@@ -72,6 +79,7 @@ bool KinModel::initJoint(char *filename)
 
 	XmlNode *node = baseNode.child;
 
+	cerr << node << endl;
 	numJoints = numJoint(node);
 	cerr << "Number of joints: " << numJoints << endl;
 	cerr << "###################################" << endl;
@@ -142,6 +150,7 @@ bool KinModel::initLink(char *filename)
 	numLinks = baseNode.linkList.size();
 
 	localLinks = new Link[numLinks];
+	collision = new int[numLinks];
 
 	cerr << numLinks << " Links" << endl;
 	i = 0;
@@ -155,6 +164,8 @@ bool KinModel::initLink(char *filename)
 		localLinks[i].from = (*it)->from;
 		localLinks[i].to = (*it)->to;
 		localLinks[i].radius = (*it)->radius;
+		localLinks[i].neighbor = (*it)->neighbor;
+		collision[i] = -1;
 		i++;
 	}
 	cerr << "Link Init Done" << endl;
@@ -164,7 +175,7 @@ void KinModel::updateState(double *states)
 {
 	for ( int j = 0 ; j < numJoints ; j++ )
 	{
-		joints[j].setTheta(states[j]);
+		joints[j] = states[j];
 	}
 }
 
@@ -172,11 +183,115 @@ void KinModel::updateState(VectorXd &states)
 {
 	for ( int j = 0 ; j < numJoints ; j++ )
 	{
-		joints[j].setTheta(states[j]);
+		joints[j] = states[j];
 	}
+}
+
+bool KinModel::checkCollision(void)
+{
+	int i, j, k;
+	Link *l1, *l2;
+	int idx = 0;
+	bool ret = false;
+	collision[numLinks-1] = collision[numLinks-2] = -1;
+	for ( i = 0 ; i < numLinks ; i++ )
+		collision[i] = -1;
+	for ( i = 0 ; i < numLinks-1 ; i++ )
+	{
+		l1 = &(localLinks[i]);
+		for ( j = i+1 ; j < numLinks ; j++ )
+		{
+			bool skip = false;
+			l2 = &(localLinks[j]);
+			// Collision checking betwen i-th link and j-th link
+			for ( k = 0 ; k < l1->neighbor.rows() ; k++ )
+			{
+				if ( l1->neighbor[k] == l2->index )
+					skip = true;
+			}
+
+			if ( skip )
+				continue;
+
+			Vector3d x[4];
+			Vector3d p, d1, d2;
+		
+			x[0] = joints[l1->index].getGlobalPos(l1->from);
+			x[1] = joints[l1->index].getGlobalPos(l1->to);
+			x[2] = joints[l2->index].getGlobalPos(l2->from);
+			x[3] = joints[l2->index].getGlobalPos(l2->to);
+			p = x[0] - x[2];
+			d1 = x[1] - x[0];
+			d2 = x[3] - x[2];
+
+			double d11, d22, d12, d1p, d2p;
+			double _alpha, _beta;
+			double mc2;
+
+			d11 = d1.transpose() * d1;
+			d22 = d2.transpose() * d2;
+			d12 = d1.transpose() * d2;
+			d1p = d1.transpose() * p;
+			d2p = d2.transpose() * p;
+
+			mc2 = fabs(d11*d22 - d12*d12);
+			if ( mc2 > 0.0001 )
+			{
+				_alpha	= ( d12*d2p - d22*d1p ) / mc2;
+				_beta	= ( d11*d2p - d12*d1p ) / mc2;
+			}
+			else
+			{
+				_alpha = 0.;
+				_beta = d2p / d22;
+			}
+
+
+			if ( _alpha < 0. )
+				_alpha = 0.;
+			if ( _alpha > 1. )
+				_alpha = 1.;
+			if ( _beta < 0. )
+				_beta = 0.;
+			if ( _beta > 1. )
+				_beta = 1.;
+
+			VectorXd d = p + _alpha*d1 - _beta*d2;
+			double dist2 = d.transpose()*d;
+			double r2;
+
+			r2 = (l1->radius+l2->radius)*(l1->radius+l2->radius);
+
+			if ( i == link_ui && j == link2_ui )
+			{
+				link_a[idx] = i;
+				link_b[idx] = j;
+				alpha[idx] = _alpha;
+				beta[idx] = _beta;
+				idx++;
+				cerr << x[0].transpose() << " ~ " << x[1].transpose() << endl;
+				cerr << x[2].transpose() << " ~ " << x[3].transpose() << endl;
+				cerr << _alpha << "," << _beta << "(" << mc2 << ")" << endl;
+				cerr << dist2 << " " << r2 << endl;
+			}
+
+			if ( dist2 < r2 )
+			{
+				collision[i] = j;
+				collision[j] = i;
+				ret = true;
+			}
+
+			num_alpha = idx;
+		}
+	}
+
+	return true;
 }
 
 KinModel::~KinModel(void)
 {
 	delete joints;
+	delete localLinks;
+	delete collision;
 }

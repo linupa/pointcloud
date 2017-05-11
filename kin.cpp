@@ -331,6 +331,24 @@ Joint &Joint::operator=(const Joint &src)
 	return  *this;
 }
 
+Joint &Joint::operator=(const double theta)
+{
+	setTheta(theta);
+
+	return  *this;
+}
+
+bool Joint::isAdjacent(const Joint &j1, const Joint &j2)
+{
+	if ( j1.parent == &j2 )
+		return true;
+	if ( j2.parent == &j1 )
+		return true;
+	return false;
+}
+
+
+
 #define SMALL_NUM (0.01)
 
 double
