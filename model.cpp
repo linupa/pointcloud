@@ -32,6 +32,7 @@ void KinModel::addJoint(const XmlNode *node, Joint *parent, int &index)
 	joint.axis	= 2;
 	joint.mass	= node->mass;
 	joint.parent = parent;
+	joint.index = index;
 	joints[index++] = joint;
 
 	if ( node->child )
@@ -96,6 +97,11 @@ bool KinModel::initJoint(char *filename)
 	for ( int i = 0 ; i < numJoints ; i++ )
 	{
 		cerr << joints[i].name << endl;
+		if (i != joints[i].index)
+		{
+			cerr << i << " " << joints[i].index << endl;
+			assert(0);
+		}
 	}
 #else
 	i = 0;
@@ -287,6 +293,35 @@ bool KinModel::checkCollision(void)
 	}
 
 	return true;
+}
+
+MatrixXd KinModel::getJacobian(int index, VectorXd pos)
+{
+	MatrixXd ret;
+	Joint *current;
+	Joint *check;
+	Joint *parent;
+
+	ret = MatrixXd::Zero(3, numJoints);
+	current	= &joints[index];
+	check = current;
+
+	for ( int i = 0 ; i < numJoints &&  check ; i++ )
+	{	
+		Vector3d w, v, pp;
+		w = Vector3d::Zero();
+		w(2) = 1.;
+
+		parent = check->parent;
+		pp = current->getGlobalPos(pos, i);
+		v = check->getGlobalOri()*w.cross(pp);
+
+		ret.block(0, check->index, 3, 1) = v;
+
+		check = check->parent;
+	}
+
+	return ret;
 }
 
 KinModel::~KinModel(void)

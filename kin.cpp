@@ -39,6 +39,7 @@ Joint::Joint(void)
 	axis	= 0;
 	parent	= NULL;
 	dirty	= true;
+	index	= -1;
 }
 
 Joint::Joint(const Joint &src)
@@ -54,13 +55,15 @@ Joint::Joint(const Joint &src)
 	axis	= src.axis;
 	parent	= src.parent;
 	dirty	= src.dirty;
+	index	= src.index;
 
 	theta	= src.theta;
 }
 
 double Joint::setTheta(double theta_)
 {
-	dirty = true;
+	if ( theta_ != theta )
+		dirty = true;
 	return theta = theta_;
 }
 
@@ -98,16 +101,7 @@ void Joint::updateOri(void)
 
 VectorXd Joint::getGlobalPos(const VectorXd &local)
 {
-	VectorXd	ret;
-
-	updateOri();
-
-	ret = rot2 * local + trans;
-
-	if ( parent )
-		ret = parent->getGlobalPos(ret);
-
-	return ret;
+	return getGlobalPos(local, -1);
 }
 
 VectorXd Joint::getGlobalPos(const pos3D &local)
@@ -118,9 +112,36 @@ VectorXd Joint::getGlobalPos(const pos3D &local)
 	_local(1) = local.get(1);
 	_local(2) = local.get(2);
 
-	return getGlobalPos(_local);
+	return getGlobalPos(_local, -1);
 }
 
+VectorXd Joint::getGlobalPos(const VectorXd &local, int depth_)
+{
+	VectorXd	ret;
+
+	if ( depth_ == 0 )
+		return local;
+
+	updateOri();
+
+	ret = rot2 * local + trans;
+
+	if ( parent )
+		ret = parent->getGlobalPos(ret, depth_-1);
+
+	return ret;
+}
+
+VectorXd Joint::getGlobalPos(const pos3D &local, int depth_)
+{
+	VectorXd	_local(3);
+
+	_local(0) = local.get(0);
+	_local(1) = local.get(1);
+	_local(2) = local.get(2);
+
+	return getGlobalPos(_local, depth_);
+}
 MatrixXd Joint::getGlobalOri( void )
 {
 	MatrixXd	ret;
@@ -327,6 +348,7 @@ Joint &Joint::operator=(const Joint &src)
 	axis	= src.axis;
 	mass	= src.mass;
 	dirty	= src.dirty;
+	index	= src.index;
 
 	return  *this;
 }

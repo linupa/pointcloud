@@ -21,6 +21,7 @@ class Joint
 {
 public:
 	char 		name[JOINT_NAME_LEN];
+	int			index;
 	VectorXd	com;
 	VectorXd	trans;
 	MatrixXd	rot;	
@@ -36,6 +37,10 @@ public:
 	VectorXd	getGlobalPos(const pos3D &local);
 	VectorXd	getGlobalPos(const VectorXd &local);
 	VectorXd	getGlobalPos(const double *local);
+	VectorXd	getGlobalPos(const pos3D &local, int depth);
+	VectorXd	getGlobalPos(const VectorXd &local, int depth);
+	VectorXd	getGlobalPos(const double *local, int depth);
+
 	MatrixXd	getGlobalOri(void);
 	void		getGlobalOri(double *mat);
 	void		setRot(VectorXd quat);

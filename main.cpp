@@ -538,6 +538,55 @@ void periodicTask(void)
 
 		model->computeJacobian(end_effector_node_, actual_[0], actual_[1], actual_[2], Jfull);
 		J = Jfull.block(0, 0, 3, Jfull.cols());
+
+#if 0 // Debugging for Jacobian function
+		{
+			static int count = 0;
+			
+			if ( (count %100) == 0 )
+			{
+				cerr << "====================" << endl;
+				cerr << actual_.transpose() << endl;
+				model->computeJacobian(end_effector_node_, actual_[0], actual_[1], actual_[2], Jfull);
+				J = Jfull.block(0, 0, 3, Jfull.cols());
+//				cerr << J.block(0,9,3,1).transpose() << endl;
+//				cerr << J.block(0,8,3,1).transpose() << endl;
+				cerr << J.block(0,0,3,10) << endl;
+				Vector3d p = VectorXd::Zero(3);
+				Vector3d w = VectorXd::Zero(3);
+				Vector3d v, j, pp;
+				VectorXd px;
+				cerr << "--------------" << endl;
+				p(1) = -0.15;
+#if 0
+				w(2) = 1;
+				v = w.cross(p);
+				pthread_mutex_lock(&link_mutex);
+
+				q = getQ(body_state.position_); 
+				myModel.updateState(q);
+
+				j = myModel.joints[9].getGlobalOri()*v;
+				cerr << j.transpose() << endl;
+
+				pp = myModel.joints[9].getLocalPos(p,1);
+				v = w.cross(pp);
+				j = myModel.joints[8].getGlobalOri()*v;
+				pthread_mutex_unlock(&link_mutex);
+				cerr << j.transpose() << endl;
+#else
+				pthread_mutex_lock(&link_mutex);
+				q = getQ(body_state.position_); 
+				myModel.updateState(q);
+				cerr << myModel.joints[9].getGlobalPos(p).transpose() << endl;
+				pthread_mutex_unlock(&link_mutex);
+				cerr << myModel.getJacobian(9, p) << endl << endl;
+#endif
+			}
+			count++;
+		}
+#endif
+
 #else
 		MatrixXd J = getJacobian(*model);
 #endif

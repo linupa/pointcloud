@@ -22,6 +22,7 @@ public:
 	void updateState(double *states);
 	void updateState(VectorXd &states);
 	bool checkCollision(void);
+	MatrixXd getJacobian(int index, VectorXd pos);
 	~KinModel(void);
 };
 
