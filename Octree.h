@@ -56,6 +56,7 @@ public:
 	void getNeighbor(OctreeEntry *pEntry, double distance);
 	void getPlane(double *coeff, double threshold);
 	void getLineDistance(double *coeff, double threshold);
+	void getPointDistance(double *coeff, double threshold);
 	void checkEmpty(void);
 	void removeEmpty(void);
 	bool checkValidity(void);

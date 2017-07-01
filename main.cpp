@@ -29,6 +29,7 @@
 #include "kin.h"
 #include "timestamp.h"
 #include "model.h"
+#include "default.h"
 
 #define CHECK_LIMIT
 #define TICK_SEC (1000)
@@ -37,8 +38,8 @@ using namespace std;
 
 typedef RRT<DOF> WbcRRT;
 
-static int win_width(800);
-static int win_height(600);
+int win_width(800);
+int win_height(600);
 static char win_title[100];
 #ifdef USE_WBC
 static scoped_ptr<jspace::Model> model;
@@ -50,7 +51,10 @@ State body_state(16, 16, 6);
 
 KinModel myModel;
 
-Vector3d gGoal;
+double		gGoalTime = 1e10;
+Vector3d	gGoal;
+Vector3d	gObj;
+Vector3d	gObjVel;
 vector<VectorXd> elbow_log;
 vector<VectorXd> elbow_des_log;
 vector<double>   time_log;
@@ -90,6 +94,12 @@ extern double *value;
 extern int seq_ui;
 extern int sample_ui;
 int numSamples = 0;
+extern double hor;
+extern double ver;
+extern double scale;
+#define FILE_NAME_SIZE (200)
+char joint_name[FILE_NAME_SIZE];
+char link_name[FILE_NAME_SIZE];
 
 VectorXd sentQ;
 VectorXd elbow_des;
@@ -128,6 +138,7 @@ void push(VectorXd dir);
 double getPotential(int mode, const VectorXd &contact, const WbcNode &node, const vector<VectorXd> &r0);
 
 void intervention(void);
+void intervention2(void);
 
 VectorXd getQ(const VectorXd &uq)
 {
@@ -156,8 +167,10 @@ pthread_mutex_t	mutex;
 pthread_mutex_t	model_mutex;
 pthread_mutex_t link_mutex;
 
-Comm *pRecvComm;
+Comm *pSttComm;
 Comm *pCmdComm;
+Comm *pObjComm;
+Comm *pKinComm;
 
 
 #define INIT_JOINT	(0x0001)
@@ -172,16 +185,25 @@ int main(int argc, char *argv[])
 	const char *robot_spec;
 	pthread_t planning_thread;
 
+	RegisterValue(win_width);
+	RegisterValue(win_height);
+	RegisterValue(hor);
+	RegisterValue(ver);
+	RegisterValue(scale);
+	RegisterValue(link_name);
+	RegisterValue(joint_name);
+
+	Default::load(argv[0]);
+
 	while ( (c = getopt(argc, argv, "j:l:t:dh") ) != -1 )
 	{
 		switch (c)
 		{
 			case 'j':
-				loaded |= (myModel.initJoint(optarg))?INIT_JOINT:0;
-				robot_spec = optarg;
+				strncpy(joint_name, optarg,FILE_NAME_SIZE);
 				break;
 			case 'l':
-				loaded |= (myModel.initLink(optarg))?INIT_LINK:0;
+				strncpy(link_name, optarg, FILE_NAME_SIZE);
 				break;
 			case 'h':
 				fprintf(stderr, "-j <joint list>\n-l <link list>\n");
@@ -191,6 +213,12 @@ int main(int argc, char *argv[])
 
 		}
 	}
+
+	loaded = 0;
+	loaded |= (myModel.initJoint(joint_name))?INIT_JOINT:0;
+	loaded |= (myModel.initLink(link_name))?INIT_LINK:0;
+	robot_spec = joint_name;
+
 	if ( !(loaded != (INIT_LINK|INIT_JOINT)) )
 		exit(-1);
 
@@ -289,10 +317,15 @@ int main(int argc, char *argv[])
 
 	pthread_create( &planning_thread, NULL, plan, NULL);
 
-	pRecvComm = new Comm(STT_PORT, 20000);
-	pRecvComm->listen();
+	pSttComm = new Comm(STT_PORT, 20000);
+	pSttComm->listen();
 
-	pCmdComm = new Comm("192.168.1.110", CMD_PORT, 20000);
+	pCmdComm = new Comm("192.168.50.33", CMD_PORT, 20000);
+
+	pObjComm = new Comm(STT_PORT+2, 20000);
+	pObjComm->listen();
+
+	pKinComm = new Comm(STT_PORT+3, 20000);
 
 	MyWindow win(win_width, win_height, "test");
 
@@ -300,6 +333,8 @@ int main(int argc, char *argv[])
 	periodicTask();
 
 	int ret = Fl::run();
+
+	Default::save();
 }
 
 #ifdef USE_WBC
@@ -357,7 +392,7 @@ void periodicTask(void)
 
 		Message msg;
 
-		if ( (msg = pRecvComm->read()).size > 0 )
+		if ( (msg = pSttComm->read()).size > 0 )
 		{
 			double *pData = (double *)msg.data;
 //			fprintf(stderr, "%d data\n", msg.size);
@@ -365,10 +400,29 @@ void periodicTask(void)
 			{
 				disp_q1[qmap[i]] = pData[i];
 			}
-		//	cerr << fullJvel_(1) << " " << fullJvel_(2) << endl;
 			disp_q1[2] = disp_q1[1];
 			free(msg.data);
+//			cerr << disp_q1.transpose() << endl;
 		}
+
+		if ( (msg = pObjComm->read()).size > 0 )
+		{
+			double *pData = (double *)msg.data;
+			gObj[0] = pData[0];
+			gObj[1] = pData[1];
+			gObj[2] = pData[2];
+			gGoalTime = pData[3];
+			gGoal[0] = pData[4];
+			gGoal[1] = pData[5];
+			gGoal[2] = pData[6];
+			gObjVel[0] = pData[7];
+			gObjVel[1] = pData[8];
+			gObjVel[2] = pData[9];
+			free(msg.data);
+		}
+
+		if ( gGoalTime < 5 )
+			intervention2();
 
 		{
 			static int count = 0;
@@ -452,16 +506,22 @@ void periodicTask(void)
 		body_state.position_	= getQa(disp_q1);
 		body_state.velocity_	= VectorXd::Zero(DOF);
 #endif
-#endif
-
-#ifdef USE_WBC
 		if ( !bPlanning )
 		{
+#if 0
 			WbcNode node;
 			node.q = body_state.position_;
 			node.getProjection();
 
 			desired_pos = node.actual;
+#else
+			VectorXd q = getQ(body_state.position_); 
+			myModel.updateState(q);
+			VectorXd p = VectorXd::Zero(3);
+			p(1) = -0.05;
+			VectorXd x = myModel.joints[9].getGlobalPos(p);
+			desired_pos = x;
+#endif
 		}
 #endif
 
@@ -534,10 +594,10 @@ void periodicTask(void)
 			0.0, -0.15, 0.0, ee_transform);
 		actual_ = ee_transform.translation();
 
-		ts1.checkElapsed(2);
 
 		model->computeJacobian(end_effector_node_, actual_[0], actual_[1], actual_[2], Jfull);
 		J = Jfull.block(0, 0, 3, Jfull.cols());
+		ts1.checkElapsed(2);
 
 #if 0 // Debugging for Jacobian function
 		{
@@ -591,7 +651,16 @@ void periodicTask(void)
 		MatrixXd J = getJacobian(*model);
 #endif
 		
+//		pthread_mutex_lock(&link_mutex);
+		q = getQ(body_state.position_); 
+		myModel.updateState(q);
+		VectorXd p = VectorXd::Zero(3);
+		VectorXd x = myModel.joints[9].getGlobalPos(p);
 		ts1.checkElapsed(3);
+	 	MatrixXd J = myModel.getJacobian(9, p);
+//		pthread_mutex_unlock(&link_mutex);
+
+		ts1.checkElapsed(4);
 
 		double kp = 100., kd = 50.0;
 
@@ -607,7 +676,7 @@ void periodicTask(void)
 			0.0001,
 			Lambda1, 0);
 
-		ts1.checkElapsed(4);
+		ts1.checkElapsed(5);
 
 		desired_pos(0) = 0.4;
 		desired_pos(1) = -0.2;
@@ -624,6 +693,7 @@ void periodicTask(void)
 		pseudoInverse(J2star*phi*J2star.transpose(),
 			0.0001,
 			Lambda2, 0);
+		ts1.checkElapsed(6);
 
 		tau1 =  J1star.transpose() * Lambda1 * kp * ( desired_pos - actual_ );
 		double mag = tau1.norm();
@@ -670,7 +740,7 @@ void periodicTask(void)
 		endeffector				= actual_;
 #endif
 	//	cerr << fullJvel_(1) << " " << fullJvel_(2) << endl;
-		ts1.checkElapsed(5);
+		ts1.checkElapsed(7);
 #endif
 	}
 
@@ -709,14 +779,28 @@ void periodicTask(void)
 	}
 	pthread_mutex_unlock(&link_mutex);
 
+	{
+		Message msg;
+		double dat[DOF+1];
+		msg.timeStamp = 0;
+		msg.data	= &dat;
+		msg.size	= sizeof(dat);
+		for ( int i = 0 ; i < DOF+1 ; i++ )
+		{
+			dat[i] = disp_q1[i];
+		}
+		pKinComm->send(&msg);
+	}
+
 	if ( bSend && qp1.size() > 2 )
 	{
 		Message msg;
-		double qa[DOF];
 		VectorXd qav;
 
 		qav = getQa(sentQ);
 		
+#if 0
+		double qa[DOF];
 		for ( int i = 0 ; i < DOF ; i++ )
 		{
 			qa[i] = qav(i);
@@ -724,13 +808,28 @@ void periodicTask(void)
 		}
 //		cerr << endl;
 
+		msg.index		= 10; //CMD_SET_STATE;
 		msg.timeStamp = 0;
 		msg.data	= (void *)qa;
 		msg.size	= sizeof(qa);
+#else
+		command cmd;
+		cmd.command = CMD_SET_CONFIGURATION;
+		cmd.data_len = 10;
+		for ( int i = 0 ; i < 10 ; i++ )
+		{
+			cmd.buf[i] = qav[i];
+		}
+
+		msg.timeStamp = 0;
+		msg.data	= &cmd;
+		msg.size	= sizeof(cmd);
+#endif
 
 			
 		pCmdComm->send(&msg);
 //		cout << "JPos: " << endl << body_state.position_ << endl;
+//		cout << "JPos: " << qav.transpose()  << endl;
 	}
 }
 
@@ -740,7 +839,7 @@ void periodicTask(void)
 VectorXd Mins;
 VectorXd Maxs;
 // Nominal Joint Limits
-double mins[] = {	-90.,	-12,	
+double mins[] = {	-90.,	-20,	
 					-80,	-25,	-85,	  0,	-48,	-60,	-60,
 					-80,   -150,	-85,	  0,	-48,	-60,	-60};
 double maxs[] = {	 90.,	 43,	
@@ -798,13 +897,13 @@ void *plan(void *)
 		
 #ifdef USE_WBC
 		((WbcNode *)rrt->nodes[0])->getProjection();
+		q0 = getQ(body_state.position_);
 #endif
 #endif
 
+		r0.clear();
 
 		int count = 0;
-		q0 = q; // getQ(body_state.position_);
-		r0.clear();
 
 		pthread_mutex_lock(&link_mutex);
 		myModel.updateState(q);
@@ -926,11 +1025,11 @@ void *plan(void *)
 				}
 				int i;
 
-				for ( i = 0 ; i < dist.size() ; i++ )
-					cerr << dist[i] << endl;
-				cerr << endl << endl;
-				for ( i = 0 ; i < distp.size() ; i++ )
-					cerr << distp[i] << endl;
+//				for ( i = 0 ; i < dist.size() ; i++ )
+//					cerr << dist[i] << endl;
+//				cerr << endl << endl;
+//				for ( i = 0 ; i < distp.size() ; i++ )
+//					cerr << distp[i] << endl;
 				ts1.checkElapsed(1);
 
 				double d_max = dist.back();
@@ -972,6 +1071,7 @@ void *plan(void *)
 						
 				}
 
+#if 0
 #if 1
 				cerr << "d_t" << endl;
 				for ( i = 0 ; i < 500 ; i++ )
@@ -1011,6 +1111,7 @@ void *plan(void *)
 				for ( int i = 0 ; i < 500 ; i++ )
 					cerr << eta[i] << endl;
 #endif
+#endif
 
 				cerr << "Original path " << path.numNode << " nodes" << endl;
 				for ( int i = 0 ; i < path.numNode ; i++ )
@@ -1037,7 +1138,7 @@ void *plan(void *)
 #ifdef USE_WBC
 					((WbcNode *)path.nodes[i])->getProjection();
 #endif
-					cerr << getPotential(push_type, elbow0, (const WbcNode&)*(path.nodes[i]), r0) << endl;
+//					cerr << getPotential(push_type, elbow0, (const WbcNode&)*(path.nodes[i]), r0) << endl;
 				}
 				pthread_mutex_unlock(&mutex);
 				bRandom = false;
@@ -1260,9 +1361,9 @@ double project2( const Node<T> *_p, Node<T> *_np )
 	if ( err > 0.05 )
 	{
 
-		cerr << "New   : " << np->actual.transpose() << endl;
-		cerr << "Error : " << diff.transpose() << endl;
-		cerr << "DES   : " << desired_pos.transpose() << endl;
+//		cerr << "New   : " << np->actual.transpose() << endl;
+//		cerr << "Error : " << diff.transpose() << endl;
+//		cerr << "DES   : " << desired_pos.transpose() << endl;
 
 		return -2.;
 	}
@@ -1480,12 +1581,126 @@ void intervention(void)
 	tickCount = 0;
 }
 
+void intervention2(void)
+{
+	int i, j, num;
+	double nmax[2] = {0., 0.};
+	double inner;
+	double min_dd = 1e10;
+	int  idxmax[2] = {-1, -1};
+	VectorXd q;
+	Vector3d n, d, pos;
+	double maxinner;
+
+	n = gObjVel / sqrt((gObjVel.transpose()*gObjVel)(0));
+	maxinner = (n.transpose() * (gGoal - gObj))(0);
+
+	num = rrt->numNodes;
+	cerr << "Check " << num << " nodes" << endl;
+	int link[] = {5,3};
+	for ( j = 0 ; j < 2 ; j++ )
+	for ( i = 0 ; i < num ; i++ )
+	{
+		double dd;
+
+		q =	getQ(rrt->nodes[i]->q);
+		myModel.updateState(q);
+		pos = myModel.joints[link[j]].getGlobalPos(VectorXd::Zero(3));
+		inner = ((pos-gObj).transpose()*n)(0);
+		d = pos - gObj - inner*n;
+		dd = d.transpose()*d;
+		if ( inner > maxinner )
+			continue;
+#if 1
+		if ( min_dd > dd )
+		{
+			min_dd = dd;
+//			idxmax[j] = i;
+		}
+#endif
+#if 1
+		if ( dd > 0.01 ) 
+			continue;
+		if ( nmax[j] < inner )
+		{
+			nmax[j] = inner;
+			idxmax[j] = i;
+		}
+#endif
+	}
+
+	int idx;
+	if ( nmax[0] < nmax[1] )
+	{
+		inner = sqrt(nmax[1]);
+		idx = idxmax[1];
+	}
+	else
+	{
+		inner = sqrt(nmax[0]);
+		idx = idxmax[0];
+	}
+	cerr << "Collision anticipation " << gGoal.transpose() << endl;
+	cerr << "closest point " << idx << " " << inner << " " << min_dd << nmax[0] << ":" << nmax[1] << endl;
+//	q =	getQ(rrt->nodes[idxmin]->q);
+//	myModel.updateState(q);
+
+	if ( idx >= 0 )
+	{
+		bRandom = true;;
+		goalIdx = idx;
+		tickCount = 0;
+	}
+}
+
+#define OCTREE_DEPTH (5)
 class TaskCell : public OctreeEntry
 {
-	vector<int>	qs;
-	int			index;
-	virtual void absorb(OctreeEntry *other);
+	vector<int>		qs;
+	int				sizeIndex;
+	int				*index;
+	unsigned int	neighbor;			
+	virtual void	absorb(OctreeEntry *other);
+
+public:
+	TaskCell(void);
+	int				numIndex;
+	int				addIndex(int idx);
 };
+
+TaskCell::TaskCell(void)
+{
+	index		= NULL;
+	neighbor	= 0;
+	sizeIndex	= 0;
+	numIndex	= 0;
+}
+
+#define DEFAULT_INDEX_SIZE (1000)
+int TaskCell::addIndex(int idx)
+{
+	if ( index == NULL )
+	{
+		index = (int *)malloc(DEFAULT_INDEX_SIZE*sizeof(int));
+		sizeIndex = DEFAULT_INDEX_SIZE;
+	}
+
+	if ( numIndex == sizeIndex-1 )
+	{
+		int *temp;
+		temp = index;
+		index = (int *)malloc(2*sizeIndex*sizeof(int));
+		memcpy(index, temp, sizeIndex*sizeof(int));
+		sizeIndex *= 2;
+		free(temp);
+	}
+
+	index[numIndex] = idx;
+	numIndex++;
+
+	return numIndex;
+}
+
 void TaskCell::absorb(OctreeEntry *other)
 {
 }
@@ -1505,14 +1720,15 @@ void addToOctree(WbcNode *node)
 	pthread_mutex_lock(&link_mutex);
 	myModel.updateState(q);
 
-	for ( int i = 1 ; i < 16 ; i++ )
+	for ( int i = 1 ; i < myModel.numJoints ; i++ )
 	{
 		x = myModel.joints[i].getGlobalPos(VectorXd::Zero(3));
 		TaskCell *cell = new TaskCell;
 		cell->x = x[0];
 		cell->y = x[1];
 		cell->z = x[2];
-		base_octree[i-1]->addEntry(cell, 5);
+		TaskCell *entry = (TaskCell*)base_octree[i-1]->addEntry(cell, OCTREE_DEPTH);
+		entry->addIndex(node->index);
 	}
 	pthread_mutex_unlock(&link_mutex);
 }

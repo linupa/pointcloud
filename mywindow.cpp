@@ -14,6 +14,8 @@
 #include <boost/scoped_ptr.hpp>
 #endif
 
+#include "kin.h"
+
 #include <FL/Fl.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/fl_draw.H>
@@ -33,19 +35,23 @@ using Eigen::MatrixXd;
 #define CLICK_THRESHOLD 3
 
 
+extern double	gGoalTime;
 extern Vector3d gGoal;
+extern Vector3d gObj;
+extern Vector3d	gObjVel;
 extern KinModel myModel;
 double target_pos[2];
+extern VectorXd desired_pos;
 int point_pressed = -1;
 int drawing;
 double hor = 0;
 double ver = 0;
+double scale;
 
 extern int drawn;
 static double dt = 0.001;
 double x_org;
 double y_org;
-double scale;
 int		octree_id = 0;
 extern int	group_threshold;
 extern bool gTrack;
@@ -66,6 +72,8 @@ VectorXd q;
 VectorXd disp_q1;
 VectorXd disp_q2;
 extern int numSamples;
+extern int win_width;
+extern int win_height;
 
 vector<VectorXd> r0;
 
@@ -94,13 +102,13 @@ double seq;
 int seq_ui = 0;
 int node_id = 0;
 int sample_ui = 0;
-int link_ui = 0;
-int link2_ui = 0;
-int num_alpha = 0;
-int		link_a[100];
-double alpha[100];
-int		link_b[100];
-double beta[100];
+extern int link_ui;
+extern int link2_ui;
+extern int num_alpha;
+extern int		link_a[100];
+extern double alpha[100];
+extern int		link_b[100];
+extern double beta[100];
 
 //extern vector<Link>	myLocalLink;
 //extern vector<Link>	myGlobalLink;
@@ -133,6 +141,8 @@ void MySim::initializeGl(void)
 	glPolygonMode( GL_FRONT_AND_BACK, GL_LINE );
 	glEnable(GL_DEPTH_TEST);
 	glEnable(GL_CULL_FACE);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 #if 0
 	glEnable(GL_LIGHTING);
@@ -425,7 +435,7 @@ void drawOccupancy(Octree *tree)
 {
 	OctreeEntry *entry = tree->entry;
 
-	if ( entry == NULL || !tree->leaf )
+	if ( entry == NULL )
 		return;
 
 	glPushMatrix();
@@ -689,8 +699,8 @@ extern double	min_pos[2], max_pos[2];
 		}
 
 
-		r = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
-		VectorXd hand = VectorXd::Zero(3);
+		r = myModel.joints[5].getGlobalPos(Vector3d::Zero());
+		Vector3d hand = Vector3d::Zero();
 		hand(1) = -0.05;
 		r1 = myModel.joints[9].getGlobalPos(hand);
 		pthread_mutex_unlock(&link_mutex);
@@ -736,7 +746,8 @@ extern double	min_pos[2], max_pos[2];
 	// Show desired end effector position
 	glPushMatrix();
 	glColor3f(1.,0.,0.);
-	glTranslatef(.4, -.2, .2);
+//	glTranslatef(.4, -.2, .2);
+	glTranslatef(desired_pos(0), desired_pos(1), desired_pos(2));
 	glutSolidSphere(0.025,20,20);
 	glPopMatrix();
 
@@ -760,9 +771,21 @@ extern double	min_pos[2], max_pos[2];
 	}
 #endif
 	
+
 	// Intevention location
 	glColor3f(0.0, 1.0, 0.0);
-	drawSphere(gGoal, 0.05, 100);
+	drawSphere(gObj, 0.05, 100);
+
+	glBegin(GL_LINES);
+	glVertex3f(gObj[0], gObj[1], gObj[2]);
+	glVertex3f(gObj[0]+gObjVel[0]*10, gObj[1]+gObjVel[1]*10, gObj[2]+gObjVel[2]*10);
+	glEnd();
+
+	if ( gGoalTime < 8. )
+	{
+		glColor3f(1.0, 0.0, 0.0);
+		drawSphere(gGoal, 0.05, 100);
+	}
 
 	unsigned int octree_mask = 0;
 	glLineWidth(1.0);
@@ -774,7 +797,30 @@ extern double	min_pos[2], max_pos[2];
 	{
 		glColor3f(color[i][0], color[i][1], color[i][2]);
 		if ( octree_mask & (1<<i) )
+		{
+			glLineWidth(1.0);
 			base_octree[i]->callBack(drawOccupancy);
+			double goal[3];
+			OctreeEntryList::reset();
+			goal[0] = gGoal[0];
+			goal[1] = gGoal[1];
+			goal[2] = gGoal[2];
+			base_octree[i]->getPointDistance(goal, 0.2);
+			if ( OctreeEntryList::count > 0 )
+				cerr << "Neighbor " << OctreeEntryList::count << endl;
+
+			glLineWidth(3.0);
+			glColor3f(1., 1., 1.);
+			for ( int j = 0 ; j < OctreeEntryList::count ; j++ )
+			{
+				drawOccupancy(OctreeEntryList::list[j].pEntry->tree);
+				cerr<< OctreeEntryList::list[j].pEntry->tree->x << ":"
+					<< OctreeEntryList::list[j].pEntry->tree->y << ":"
+					<< OctreeEntryList::list[j].pEntry->tree->z << " "
+//					<< OctreeEntryList::list[j].pEntry->z << " " <<
+					<< endl;
+			}
+		}
 	}
 
 	// Floor 
@@ -931,6 +977,8 @@ resize(int x, int y, int w, int h)
 	learnBaseButton->resize(w-150,	h - 35, 70, 25);
 	quitButton->resize(		w-75,	h - 35, 70, 25);
 
+	win_width	= w;
+	win_height	= h;
 }
 
 extern VectorXd Mins;

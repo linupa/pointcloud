@@ -33,8 +33,8 @@ Joints::~Joints(void)
 
 Joint::Joint(void)
 {
-	rot = rot2 = MatrixXd::Zero(3,3);
-	com = trans = VectorXd::Zero(3);
+	rot = rot2 = Matrix3d::Zero();
+	com = trans = Vector3d::Zero();
 	mass	= 0.;
 	axis	= 0;
 	parent	= NULL;
@@ -76,7 +76,7 @@ void Joint::updateOri(void)
 {
 	if ( dirty )
 	{
-		MatrixXd	act;
+		Matrix3d	act;
 		int			x, y;
 		int			axismap[3][2] = {{1,2}, {2,0}, {0,1}};
 
@@ -86,7 +86,7 @@ void Joint::updateOri(void)
 		assert(x < 3);
 		assert(y < 3);
 
-		act = MatrixXd::Identity(3,3);
+		act = Matrix3d::Identity(3,3);
 
 		act(x,x) = cos(theta);
 		act(x,y) = -sin(theta);
@@ -99,12 +99,12 @@ void Joint::updateOri(void)
 	}
 }
 
-VectorXd Joint::getGlobalPos(const VectorXd &local)
+Vector3d Joint::getGlobalPos(const Vector3d &local)
 {
 	return getGlobalPos(local, -1);
 }
 
-VectorXd Joint::getGlobalPos(const pos3D &local)
+Vector3d Joint::getGlobalPos(const pos3D &local)
 {
 	VectorXd	_local(3);
 
@@ -115,9 +115,9 @@ VectorXd Joint::getGlobalPos(const pos3D &local)
 	return getGlobalPos(_local, -1);
 }
 
-VectorXd Joint::getGlobalPos(const VectorXd &local, int depth_)
+Vector3d Joint::getGlobalPos(const Vector3d &local, int depth_)
 {
-	VectorXd	ret;
+	Vector3d	ret;
 
 	if ( depth_ == 0 )
 		return local;
@@ -132,9 +132,9 @@ VectorXd Joint::getGlobalPos(const VectorXd &local, int depth_)
 	return ret;
 }
 
-VectorXd Joint::getGlobalPos(const pos3D &local, int depth_)
+Vector3d Joint::getGlobalPos(const pos3D &local, int depth_)
 {
-	VectorXd	_local(3);
+	Vector3d	_local;
 
 	_local(0) = local.get(0);
 	_local(1) = local.get(1);
@@ -142,16 +142,17 @@ VectorXd Joint::getGlobalPos(const pos3D &local, int depth_)
 
 	return getGlobalPos(_local, depth_);
 }
-MatrixXd Joint::getGlobalOri( void )
+Matrix3d Joint::getGlobalOri( void )
 {
-	MatrixXd	ret;
+	Matrix3d	ret;
 
 	updateOri();
 
-	ret = rot2;
 
 	if ( parent )
-		ret = parent->getGlobalOri() * ret;
+		ret = parent->getGlobalOri() * rot2;
+	else
+		ret = rot2;
 
 	return ret;
 }
@@ -160,7 +161,7 @@ void Joint::getGlobalOri( double *mat )
 {
 	assert(mat);
 
-	MatrixXd _rot = getGlobalOri();
+	Matrix3d _rot = getGlobalOri();
 
 	for ( int i = 0 ; i < 9 ; i++ )
 	{

@@ -279,6 +279,37 @@ void Octree::getLineDistance(double *coeff, double threshold)
 	}
 }
 
+void Octree::getPointDistance(double *pos, double threshold)
+{
+	if ( entry )
+		OctreeEntryList::addEntry(entry);
+
+	if ( child[0] )
+	{
+		double c0, c1, c2;
+		double th;
+
+		th = len/2. + threshold;
+		th = th*th;
+		
+		for ( int i = 0 ; i < 8 ; i++ )
+		{
+			double xx, yy, zz;
+			double distance;
+			double ii, jj, kk;
+
+			xx = child[i]->x - pos[0];
+			yy = child[i]->y - pos[1];
+			zz = child[i]->z - pos[2];
+
+			distance = xx*xx + yy*yy + zz*zz;
+
+			if ( distance < th )
+				child[i]->getPointDistance(pos, threshold);
+		}
+	}
+}
+
 int cond[8][3] = 
 {
 	{ -1, -1, -1 },

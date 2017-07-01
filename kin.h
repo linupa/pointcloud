@@ -22,10 +22,10 @@ class Joint
 public:
 	char 		name[JOINT_NAME_LEN];
 	int			index;
-	VectorXd	com;
-	VectorXd	trans;
-	MatrixXd	rot;	
-	MatrixXd	rot2;
+	Vector3d	com;
+	Vector3d	trans;
+	Matrix3d	rot;	
+	Matrix3d	rot2;
 	double		mass;
 	int			axis;
 	Joint		*parent;
@@ -34,14 +34,14 @@ public:
 				Joint(void);
 				Joint(const Joint &src);
 	void		updateOri(void);
-	VectorXd	getGlobalPos(const pos3D &local);
-	VectorXd	getGlobalPos(const VectorXd &local);
-	VectorXd	getGlobalPos(const double *local);
-	VectorXd	getGlobalPos(const pos3D &local, int depth);
-	VectorXd	getGlobalPos(const VectorXd &local, int depth);
-	VectorXd	getGlobalPos(const double *local, int depth);
+	Vector3d	getGlobalPos(const pos3D &local);
+	Vector3d	getGlobalPos(const Vector3d &local);
+	Vector3d	getGlobalPos(const double *local);
+	Vector3d	getGlobalPos(const pos3D &local, int depth);
+	Vector3d	getGlobalPos(const Vector3d &local, int depth);
+	Vector3d	getGlobalPos(const double *local, int depth);
 
-	MatrixXd	getGlobalOri(void);
+	Matrix3d	getGlobalOri(void);
 	void		getGlobalOri(double *mat);
 	void		setRot(VectorXd quat);
 	void		setRot(VectorXd axis, double deg);

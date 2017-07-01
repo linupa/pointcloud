@@ -3,13 +3,13 @@
 #include "xml.h"
 
 using namespace std;
-extern int link_ui;
-extern int link2_ui;
-extern int		link_a[100];
-extern double alpha[100];
-extern int		link_b[100];
-extern double beta[100];
-extern int num_alpha;
+int link_ui = 0;
+int link2_ui = 0;
+int		link_a[100];
+double alpha[100];
+int		link_b[100];
+double beta[100];
+int num_alpha = 0;
 
 void KinModel::addJoint(const XmlNode *node, Joint *parent, int &index)
 {
@@ -220,17 +220,20 @@ bool KinModel::checkCollision(void)
 				continue;
 
 			Vector3d x[4];
-			Vector3d p, d1, d2;
+			Vector3d p, q, r, s, d1, d2;
 		
 			x[0] = joints[l1->index].getGlobalPos(l1->from);
 			x[1] = joints[l1->index].getGlobalPos(l1->to);
 			x[2] = joints[l2->index].getGlobalPos(l2->from);
 			x[3] = joints[l2->index].getGlobalPos(l2->to);
 			p = x[0] - x[2];
+			q = x[1] - x[2];
+			r = x[2] - x[0];
+			s = x[3] - x[0];
 			d1 = x[1] - x[0];
 			d2 = x[3] - x[2];
 
-			double d11, d22, d12, d1p, d2p;
+			double d11, d22, d12, d1p, d2p, d2q, d1r, d1s;
 			double _alpha, _beta;
 			double mc2;
 
@@ -239,6 +242,9 @@ bool KinModel::checkCollision(void)
 			d12 = d1.transpose() * d2;
 			d1p = d1.transpose() * p;
 			d2p = d2.transpose() * p;
+			d2q = d2.transpose() * q;
+			d1r = d1.transpose() * r;
+			d1s = d1.transpose() * s;
 
 			mc2 = fabs(d11*d22 - d12*d12);
 			if ( mc2 > 0.0001 )
@@ -252,15 +258,31 @@ bool KinModel::checkCollision(void)
 				_beta = d2p / d22;
 			}
 
+			if ( _alpha < 0. )
+			{
+				_alpha = 0.;
+				_beta = d2p / d22;
+			}
+			else if ( _alpha > 1. )
+			{
+				_alpha = 1.;
+				_beta = d2q / d22;
+			}
+			if ( _beta < 0. )
+			{
+				_alpha = d1r / d11;
+				_beta = 0.;
+			}
+			else if ( _beta > 1. )
+			{
+				_alpha = d1s / d11;
+				_beta = 1.;
+			}
 
 			if ( _alpha < 0. )
 				_alpha = 0.;
-			if ( _alpha > 1. )
+			else if ( _alpha > 1. )
 				_alpha = 1.;
-			if ( _beta < 0. )
-				_beta = 0.;
-			if ( _beta > 1. )
-				_beta = 1.;
 
 			VectorXd d = p + _alpha*d1 - _beta*d2;
 			double dist2 = d.transpose()*d;
@@ -295,7 +317,7 @@ bool KinModel::checkCollision(void)
 	return true;
 }
 
-MatrixXd KinModel::getJacobian(int index, VectorXd pos)
+MatrixXd KinModel::getJacobian(int index, Vector3d pos)
 {
 	MatrixXd ret;
 	Joint *current;
@@ -326,7 +348,7 @@ MatrixXd KinModel::getJacobian(int index, VectorXd pos)
 
 KinModel::~KinModel(void)
 {
-	delete joints;
-	delete localLinks;
-	delete collision;
+	delete[] joints;
+	delete[] localLinks;
+	delete[] collision;
 }

@@ -230,7 +230,7 @@ double WbcNode::project( Node<DOF> *_np, double step, double max ) const
 	VectorXd dq0;
 	VectorXd dq, ndq;
 	VectorXd dst;
-	VectorXd hand = VectorXd::Zero(3);
+	Vector3d hand = Vector3d::Zero();
 	hand(1) = -0.05;
 	bool updated = false;
 
@@ -296,9 +296,9 @@ double WbcNode::project( Node<DOF> *_np, double step, double max ) const
 		if ( err > (0.05*0.05) )
 		{
 
-			cerr << "New   : " << r1.transpose() << endl;
-			cerr << "DES   : " << desired_pos.transpose() << endl;
-			cerr << "Error : " << diff.transpose() << endl;
+//			cerr << "New   : " << r1.transpose() << endl;
+//			cerr << "DES   : " << desired_pos.transpose() << endl;
+//			cerr << "Error : " << diff.transpose() << endl;
 			break;
 		}
 		else if ( err > 0.03*0.03 )
