@@ -1042,7 +1042,7 @@ double Path<T>::findPath( const Node<T> &from, const Node<T> &to, int &num)
 
 	if ( dist2 > step*step )
 	{
-		cerr << "Failed to find path " << diff << " " << step<< endl;
+//		cerr << "Failed to find path " << diff << " " << step<< endl;
 #if 1
 		for ( int j = 0 ; j < num ; j++ )
 		{
