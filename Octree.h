@@ -1,7 +1,10 @@
+#ifndef __OCTREE_H__
+#define __OCTREE_H__
 #include <Eigen/Dense>
 
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
+using Eigen::Vector3d;
 
 class Octree;
 
@@ -56,6 +59,7 @@ public:
 	void getNeighbor(OctreeEntry *pEntry, double distance);
 	void getPlane(double *coeff, double threshold);
 	void getLineDistance(double *coeff, double threshold);
+	void getLineDistance(const Vector3d &point, const Vector3d &dir, double threshold);
 	void getPointDistance(double *coeff, double threshold);
 	void checkEmpty(void);
 	void removeEmpty(void);
@@ -70,3 +74,4 @@ private:
 
 	static int count;
 };
+#endif

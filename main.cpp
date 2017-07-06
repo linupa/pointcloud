@@ -30,23 +30,21 @@
 #include "timestamp.h"
 #include "model.h"
 #include "default.h"
+#include "wbc.h"
+#include "rvolume.h"
 
 #define CHECK_LIMIT
 #define TICK_SEC (1000)
 
 using namespace std;
 
-typedef RRT<DOF> WbcRRT;
 
 int win_width(800);
 int win_height(600);
 static char win_title[100];
 #ifdef USE_WBC
-static scoped_ptr<jspace::Model> model;
-static scoped_ptr<jspace::Model> model_planning;
-#endif
-#ifdef USE_WBC
-State body_state(16, 16, 6);
+static State body_state;
+extern void simulate(State &body_state);
 #endif
 
 KinModel myModel;
@@ -55,90 +53,38 @@ double		gGoalTime = 1e10;
 Vector3d	gGoal;
 Vector3d	gObj;
 Vector3d	gObjVel;
-vector<VectorXd> elbow_log;
-vector<VectorXd> elbow_des_log;
+vector<Vector3d> elbow_log;
 vector<double>   time_log;
-Octree *base_octree[20];
 
 //void dump_to_stdout( TiXmlNode* pParent, unsigned int indent = 0);
 void *plan(void *);
 
-bool bSimul = false;
-bool bPlan = false;
-bool bPlanning = false;
-bool bRandom = false;
 int goalIdx = -1;
-bool bSend = false;
-extern VectorXd q;
 VectorXd q0;
-extern VectorXd disp_q1;
-extern VectorXd disp_q2;
-extern vector<VectorXd> r0;
-extern vector<VectorXd> qp1;
-extern vector<VectorXd> qp2;
-extern bool bPath;
-vector<double> dist;
-vector<double> distp;
-vector<double> d_t;
-vector<double> eta;
-static double dt = 0.001;
-VectorXd desired_pos;
-extern int tickCount;
+extern vector<double> eta;
+double dt = 0.001;
+Vector3d desired_pos;
 extern double seq; 
 //vector<Link>	myLocalLink;
 //vector<Link>	myGlobalLink;
 WbcRRT *rrt;
 PRM<DOF> *prm;
-void addToOctree(WbcNode *node);
-extern double *value;
 extern int seq_ui;
 extern int sample_ui;
-int numSamples = 0;
-extern double hor;
-extern double ver;
-extern double scale;
 #define FILE_NAME_SIZE (200)
 char joint_name[FILE_NAME_SIZE];
 char link_name[FILE_NAME_SIZE];
+extern void initSimulation(const char *robot_spec);
 
-VectorXd sentQ;
-VectorXd elbow_des;
-VectorXd elbow0;
-VectorXd elbow;
-VectorXd error;
+Vector3d elbow_des;
+Vector3d elbow0;
+Vector3d elbow;
+Vector3d error;
+double q_init[DOF+1] = {0.};
 
-VectorXd endeffector;
-
-VectorXd interpolate(const vector<VectorXd> &list, double seq)
-{
-	VectorXd ret;
-	
-	if ( list.size() )
-	{
-		int idx = (int)seq;
-		double ratio = seq - idx;
-		VectorXd q0, q1;
-
-		if ( idx < list.size()-1 )
-		{
-			q0 = list[idx];
-			q1 = list[idx+1];
-
-			ret = (1.-ratio) * q0 + ratio * q1;
-		}
-		else
-			ret = list[list.size()-1];
-	}
-
-	return ret;
-}
-
-
-void push(VectorXd dir);
-double getPotential(int mode, const VectorXd &contact, const WbcNode &node, const vector<VectorXd> &r0);
-
+VectorXd interpolate(const vector<VectorXd> &list, double seq);
 void intervention(void);
-void intervention2(void);
+Vector3d intervention2(void);
 
 VectorXd getQ(const VectorXd &uq)
 {
@@ -184,6 +130,7 @@ int main(int argc, char *argv[])
 	int loaded = 0;
 	const char *robot_spec;
 	pthread_t planning_thread;
+	RVolume rv(LINKS);
 
 	RegisterValue(win_width);
 	RegisterValue(win_height);
@@ -192,6 +139,7 @@ int main(int argc, char *argv[])
 	RegisterValue(scale);
 	RegisterValue(link_name);
 	RegisterValue(joint_name);
+	RegisterValue(q_init);
 
 	Default::load(argv[0]);
 
@@ -222,24 +170,21 @@ int main(int argc, char *argv[])
 	if ( !(loaded != (INIT_LINK|INIT_JOINT)) )
 		exit(-1);
 
-	disp_q1 = disp_q2 = q = VectorXd::Zero(myModel.numJoints);
-	endeffector = VectorXd::Zero(3);;
-	q0 = q;
+	q0 = VectorXd::Zero(DOF+1);
+	{
+		int i;
+		for ( i = 0 ; i < DOF+1 ; i++ )
+			q0[i] = q_init[i];
+	}
+	disp_q1 = disp_q2 = q0;
 
-#ifdef USE_WBC
-	body_state = State(myModel.numJoints-1, myModel.numJoints-1, 6);
-#endif
 	cerr << "Model Init Done... " << endl;
-	r0.clear();
-	myModel.updateState(q0);
+	myModel.updateState(disp_q1);
+	cerr << disp_q1.transpose() << endl;
 
 	cerr << "Model update... " << endl;
 
 	int i, j;
-	for ( j = 0 ; j < 10 ; j++ )
-	{
-		r0.push_back(myModel.joints[j].getGlobalPos(myModel.joints[j].com));
-	}
 
 #if 0
 	int idxs[] = {1, 1, 2, 2, 2, 4, 6, 9};
@@ -294,26 +239,16 @@ int main(int argc, char *argv[])
 	pthread_mutex_init( &link_mutex, NULL );
 
 #ifdef USE_WBC
-	model.reset(test::parse_sai_xml_file(robot_spec, false));
-	model->setConstraint("Dreamer_Torso");
-	
-	cerr << "DOF " << model->getNDOF() << endl;
+	initSimulation(robot_spec);
+	cerr << __LINE__ << " " << myModel.numJoints << endl;
+	body_state = State(myModel.numJoints-1, myModel.numJoints-1, 6);
 
-	WbcNode::model.reset(test::parse_sai_xml_file(robot_spec, false));
-	WbcNode::model->setConstraint("Dreamer_Torso");
+	WbcNode::model->update(body_state);
 #endif
 //	WbcNode::callbackAdd = NULL;
 
-	for ( int i = 0 ; i < 20 ; i++ )
-	{
-		base_octree[i] = new Octree;
-		base_octree[i]->x = 0.;
-		base_octree[i]->y = 0.;
-		base_octree[i]->z = 0.;
-		base_octree[i]->len = 1.;
-	}
 
-	WbcNode::callbackAdd = (WbcNode::CALLBACK)addToOctree;
+	WbcNode::callbackAdd = (WbcNode::CALLBACK)RVolume::addToOctree;
 
 	pthread_create( &planning_thread, NULL, plan, NULL);
 
@@ -337,56 +272,14 @@ int main(int argc, char *argv[])
 	Default::save();
 }
 
-#ifdef USE_WBC
-MatrixXd getJacobian(const Model &model)
-{
-	MatrixXd Jfull, J;
-	VectorXd actual_;
-
-	taoDNode const *end_effector_node_ = model.getNode(DOF);
-	jspace::Transform ee_transform;
-	model.computeGlobalFrame(end_effector_node_,
-		0.0, -0.05, 0.0, ee_transform);
-	actual_ = ee_transform.translation();
-
-	model.computeJacobian(end_effector_node_, actual_[0], actual_[1], actual_[2], Jfull);
-	J = Jfull.block(0, 0, 3, Jfull.cols());
-
-	return J;
-}
-#endif
-bool pushing = false;
-
-extern int push_type;
+Vector3d	gIntervenePos;
+Vector3d	gInterveneVel;
 int qmap[] = {0,1,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
-Timestamp ts1("Period");
 void periodicTask(void)
 {
-	VectorXd desired_posture = VectorXd::Zero(DOF);
-	VectorXd tau1, tau2, tau;
-	VectorXd fullJpos_, fullJvel_;
-	VectorXd actual_;
-	MatrixXd UNcBar;
-	MatrixXd phi;
-	MatrixXd phiinv; 
-	MatrixXd J1star;
-	MatrixXd Lambda1;
-	MatrixXd ainv;
-	VectorXd grav;
-	MatrixXd Nc;
-	MatrixXd UNc;
-	MatrixXd U;
-	MatrixXd Jfull, J;
-	MatrixXd N1, Lambda2;
-	MatrixXd J2star;
-	VectorXd	ddq;
-	double sec = (double)tickCount / TICK_SEC;
 
 
-	if ( desired_pos.rows() != 3 )
-		desired_pos = VectorXd::Zero(3);
-
-	if ( !bSimul )
+	if ( !(getRobotState() & STATE_SIMUL) )
 	{
 		int i;
 
@@ -421,8 +314,27 @@ void periodicTask(void)
 			free(msg.data);
 		}
 
-		if ( gGoalTime < 5 )
-			intervention2();
+		{
+			{
+				static double prevTime = 0;
+				double currentTime = Timestamp::getCurrentTime();
+				if ( prevTime + 5 < currentTime )
+				{
+					if ( gGoalTime < 5 )
+					{
+						gIntervenePos = gObj;
+						gInterveneVel = intervention2();
+
+						prevTime = currentTime;
+					}
+					else
+					{
+//						gIntervenePos = Vector3d::Zero();
+//						gInterveneVel = Vector3d::Zero();
+					}
+				}
+			}
+		}
 
 		{
 			static int count = 0;
@@ -435,7 +347,7 @@ void periodicTask(void)
 				VectorXd q_des;
 				VectorXd q_err;
 
-				qa = getQa(q);
+				qa = getQa(disp_q1);
 				q_des = VectorXd::Zero(DOF);
 				q_des(5) = 1.57;
 				VectorXd  tau;
@@ -453,26 +365,15 @@ void periodicTask(void)
 
 			count++;
 		}
-		vector<VectorXd> *qp;
-		if ( bPath )
-		{
-			qp = &qp1;
-			glColor3f(1.0, 1.0, 0.8);
-		}
-		else
-		{
-			qp = &qp2;
-			glColor3f(0.8, 0.8, 0.8);
-		}
-		if ( qp->size() > 0 && eta.size() > 0 )
+		if ( qp1.size() > 0 && eta.size() > 0 )
 		{
 			static int dest = 0;
-	//		seq	= (tickCount/2 ) % (3*qp->size()-1);
+			double sec = Timestamp::getElapsedTime();
 	//		cerr << "sec: " << sec << endl;
 			if ( sec >= 20. )
 			{
 				seq = 0.;
-				pushing = false;
+				clearRobotState(STATE_OPERATING);
 			}
 			else if ( sec >= 10. )
 			{
@@ -487,43 +388,29 @@ void periodicTask(void)
 				dest = (int)seq;
 			}
 
-			disp_q1 = interpolate(*qp, seq);
+			disp_q1 = interpolate(qp1, seq);
 		}
 		else
-			pushing = false;
+			clearRobotState(STATE_OPERATING);
 
 		if ( sample_ui > 0 && sample_ui <= rrt->numNodes )
 			disp_q2 = getQ(rrt->nodes[sample_ui - 1]->q);
 
-#ifdef USE_WBC
-#if 0
-		for ( i = 0 ; i < DOF ; i++ )
-		{
-			body_state.position_(i) = q[qmap[i]];
-			body_state.velocity_(i) = 0.;
-		}
-#else
-		body_state.position_	= getQa(disp_q1);
-		body_state.velocity_	= VectorXd::Zero(DOF);
-#endif
-		if ( !bPlanning )
+		if ( !(getRobotState() & STATE_LEARNING) )
 		{
 #if 0
 			WbcNode node;
-			node.q = body_state.position_;
+			node.q = getQa(disp_q1);
 			node.getProjection();
 
 			desired_pos = node.actual;
 #else
-			VectorXd q = getQ(body_state.position_); 
-			myModel.updateState(q);
+			myModel.updateState(disp_q1);
 			VectorXd p = VectorXd::Zero(3);
 			p(1) = -0.05;
-			VectorXd x = myModel.joints[9].getGlobalPos(p);
-			desired_pos = x;
+			desired_pos = myModel.joints[9].getGlobalPos(p);
 #endif
 		}
-#endif
 
 		int j;
 
@@ -532,252 +419,30 @@ void periodicTask(void)
 		myModel.updateState(q0);
 		elbow0 = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
 
-		myModel.updateState(q);
+		myModel.updateState(disp_q1);
 		elbow = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
 
-		if ( sentQ.size() == 10 )
-		{
-//			cerr << "sentQ " << sentQ.transpose() << endl;
-			myModel.updateState(sentQ);
-			elbow_des = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
-		}
-		else
-		{
-			elbow_des = VectorXd::Zero(3);
-//			cerr << "Size " << sentQ.size() << endl;
-		}
 		pthread_mutex_unlock(&link_mutex);
 
 		error = elbow - elbow0;
 
-//		if ( pushing )
+//		if ( getRobotState() & STATE_OPERATING );
 		{
 //			cerr << "Elbow Logging" << endl;
 			pthread_mutex_lock(&mutex);
 			elbow_log.push_back(elbow);
-			elbow_des_log.push_back(elbow_des);
-			time_log.push_back(tickCount);
+			time_log.push_back(Timestamp::getElapsedTime());
 			pthread_mutex_unlock(&mutex);
 		}
-		tickCount++;
 	}
+#ifdef USE_WBC
 	else // Simulation
 	{
-
-#ifdef USE_WBC
-		ts1.setBaseline();
-
-		model->update(body_state);
-
-		ts1.checkElapsed(0);
-
-		fullJpos_ = model->getFullState().position_;
-		fullJvel_ = model->getFullState().velocity_;
-
-		model->getInverseMassInertia(ainv);
-
-		model->getGravity(grav);
-
-		Constraint * constraint = model->getConstraint();
-		
-		constraint->updateJc(*model);
-		constraint->getNc(ainv,Nc);
-		constraint->getU(U);
-		UNc = U*Nc;
-
-		ts1.checkElapsed(1);
-
-#if 1
-		taoDNode const *end_effector_node_ = model->getNode(9);
-		jspace::Transform ee_transform;
-		model->computeGlobalFrame(end_effector_node_,
-			0.0, -0.15, 0.0, ee_transform);
-		actual_ = ee_transform.translation();
-
-
-		model->computeJacobian(end_effector_node_, actual_[0], actual_[1], actual_[2], Jfull);
-		J = Jfull.block(0, 0, 3, Jfull.cols());
-		ts1.checkElapsed(2);
-
-#if 0 // Debugging for Jacobian function
-		{
-			static int count = 0;
-			
-			if ( (count %100) == 0 )
-			{
-				cerr << "====================" << endl;
-				cerr << actual_.transpose() << endl;
-				model->computeJacobian(end_effector_node_, actual_[0], actual_[1], actual_[2], Jfull);
-				J = Jfull.block(0, 0, 3, Jfull.cols());
-//				cerr << J.block(0,9,3,1).transpose() << endl;
-//				cerr << J.block(0,8,3,1).transpose() << endl;
-				cerr << J.block(0,0,3,10) << endl;
-				Vector3d p = VectorXd::Zero(3);
-				Vector3d w = VectorXd::Zero(3);
-				Vector3d v, j, pp;
-				VectorXd px;
-				cerr << "--------------" << endl;
-				p(1) = -0.15;
-#if 0
-				w(2) = 1;
-				v = w.cross(p);
-				pthread_mutex_lock(&link_mutex);
-
-				q = getQ(body_state.position_); 
-				myModel.updateState(q);
-
-				j = myModel.joints[9].getGlobalOri()*v;
-				cerr << j.transpose() << endl;
-
-				pp = myModel.joints[9].getLocalPos(p,1);
-				v = w.cross(pp);
-				j = myModel.joints[8].getGlobalOri()*v;
-				pthread_mutex_unlock(&link_mutex);
-				cerr << j.transpose() << endl;
-#else
-				pthread_mutex_lock(&link_mutex);
-				q = getQ(body_state.position_); 
-				myModel.updateState(q);
-				cerr << myModel.joints[9].getGlobalPos(p).transpose() << endl;
-				pthread_mutex_unlock(&link_mutex);
-				cerr << myModel.getJacobian(9, p) << endl << endl;
-#endif
-			}
-			count++;
-		}
-#endif
-
-#else
-		MatrixXd J = getJacobian(*model);
-#endif
-		
-//		pthread_mutex_lock(&link_mutex);
-		q = getQ(body_state.position_); 
-		myModel.updateState(q);
-		VectorXd p = VectorXd::Zero(3);
-		VectorXd x = myModel.joints[9].getGlobalPos(p);
-		ts1.checkElapsed(3);
-	 	MatrixXd J = myModel.getJacobian(9, p);
-//		pthread_mutex_unlock(&link_mutex);
-
-		ts1.checkElapsed(4);
-
-		double kp = 100., kd = 50.0;
-
-		phi = UNc * ainv * UNc.transpose();
-		//XXXX hardcoded sigma threshold
-		pseudoInverse(phi,
-			0.0001,
-			phiinv, 0);
-		UNcBar = ainv * UNc.transpose() * phiinv;
-		J1star = J * UNcBar;
-
-		pseudoInverse( J1star * phi * J1star.transpose(),
-			0.0001,
-			Lambda1, 0);
-
-		ts1.checkElapsed(5);
-
-		desired_pos(0) = 0.4;
-		desired_pos(1) = -0.2;
-		desired_pos(2) = 0.2;
-
-		desired_posture(3) = M_PI/6.;
-		desired_posture(5) = M_PI/2.;
-		desired_posture(10) = -M_PI/12.;
-		desired_posture(12) = 0.;//M_PI/4.;
-
-		N1 = MatrixXd::Identity(DOF,DOF) - phi*J1star.transpose()*Lambda1*J1star;
-
-		J2star = U*UNcBar*N1;
-		pseudoInverse(J2star*phi*J2star.transpose(),
-			0.0001,
-			Lambda2, 0);
-		ts1.checkElapsed(6);
-
-		tau1 =  J1star.transpose() * Lambda1 * kp * ( desired_pos - actual_ );
-		double mag = tau1.norm();
-//		if ( mag > 10. )
-//			tau1 = tau1 / mag*10.;
-		tau1 -=  J1star.transpose() * Lambda1 * kd * J * fullJvel_;
-	//	cout << "Lambda2 " << Lambda2.rows() << "x" << Lambda2.cols() << endl;
-	//	cout << "N1 " << N1.rows() << "x" << N1.cols() << endl;
-	//	cout << "vel " << body_state.position_.rows() << "x" << body_state.position_.cols() << endl;
-	//	cout << "UNcBar " << UNcBar.rows() << "x" << UNcBar.cols() << endl;
-	//	cout << "U " << U.rows() << "x" << U.cols() << endl;
-	//	tau2 =  UNcBar.transpose() * U.transpose() * Lambda2 * (kp * (-body_state.position_) - kd * body_state.velocity_);
-		tau2 =  J2star.transpose() * Lambda2 * (10.*kp * ( desired_posture - body_state.position_) - kd * body_state.velocity_ - tau1);
-	//	cout << "ainv " << ainv.rows() << "x" << ainv.cols() << endl;
-	//	tau		= tau1 + UNcBar.transpose() * grav;
-		tau		= tau1 + tau2 + UNcBar.transpose() * grav;
-	//	cout << "JAN1 " << endl << J * ainv * UNc.transpose() * N1.transpose() << endl;
-
-	//	cout << "ainv " << ainv.rows() << "x" << ainv.cols() << endl;
-	//	cout << "J1star " << J1star.rows() << "x" << J1star.cols() << endl;
-	//	cout << "Nc " << NcT.rows() << "x" << NcT.cols() << endl;
-	//	cout << "GRAV " << grav.rows() << "x" << grav.cols() << endl;
-	//	VectorXd ddq =  -ainv * NcT * grav;
-		ddq = ainv * ( UNc.transpose()*tau - Nc.transpose() * grav );
-
-	//	cout << "ddt " << ddq.rows() << "x" << ddq.cols() << endl;
-	//	cout << "jVel " << fullJvel_.rows() << "x" << fullJvel_.cols() << endl;
-
-		fullJvel_ += ddq * dt;
-		fullJpos_ += fullJvel_ * dt;
-
-#if 0
-		for ( int i = 0 ; i < DOF ; i++ )
-		{
-			body_state.position_(i) = fullJpos_[qmap[i]];
-			body_state.velocity_(i) = fullJvel_[qmap[i]];
-			q[qmap[i]] = body_state.position_(i);
-		}
-		q[3] = fullJpos_[2];
-#else
-		body_state.position_ = getQa(fullJpos_);
-		body_state.velocity_ = getQa(fullJvel_);
-		disp_q1 = q			= fullJpos_;
-		endeffector				= actual_;
-#endif
-	//	cerr << fullJvel_(1) << " " << fullJvel_(2) << endl;
-		ts1.checkElapsed(7);
-#endif
+		body_state.position_ = getQa(disp_q1);
+		simulate(body_state);
+		disp_q1 = getQ(body_state.position_); 
 	}
-
-	{
-		static int count = 0;
-
-		if ( (count % 1000) == 0 )
-		{
-#ifdef USE_WBC
-			if ( bSimul )
-			{
-				cout << ts1;
-				cout << "stat " << body_state.position_.transpose() << endl;
-				cout << "q " << q[1] << " " << q[2] << endl;
-				cout << "actual_ " << endl << actual_.transpose() << endl;
-				cout << "full " << fullJpos_.transpose() << endl;
-				cout << "full " << (fullJpos_*180./M_PI).transpose() << endl;
-				cout << "tau1 " << tau1.transpose() << endl;
-				cout << "tau2 " << tau2.transpose() << endl;
-				VectorXd ddx = J * ddq; // ainv * UNc.transpose() * tau;
-				cout << "ddx " << ddx.transpose() << endl;
-				cout << "ddq " << ddq.transpose() << endl;
-				cout << "J " << J << endl;
-//				cout << "U " << U << endl;
-			}
 #endif
-		}
-		count++;
-	}
-
-	pthread_mutex_lock(&link_mutex);
-	if ( qp1.size() > 2 )
-	{
-		VectorXd Q = interpolate(qp1, seq);
-		sentQ = Q;
-	}
-	pthread_mutex_unlock(&link_mutex);
 
 	{
 		Message msg;
@@ -792,27 +457,14 @@ void periodicTask(void)
 		pKinComm->send(&msg);
 	}
 
-	if ( bSend && qp1.size() > 2 )
+	if ( (getRobotState() & STATE_SEND) && qp1.size() > 2 )
 	{
 		Message msg;
 		VectorXd qav;
 
-		qav = getQa(sentQ);
+		VectorXd q = interpolate(qp1, seq);
+		qav = getQa(q);
 		
-#if 0
-		double qa[DOF];
-		for ( int i = 0 ; i < DOF ; i++ )
-		{
-			qa[i] = qav(i);
-//			cerr << q[i] << " ";
-		}
-//		cerr << endl;
-
-		msg.index		= 10; //CMD_SET_STATE;
-		msg.timeStamp = 0;
-		msg.data	= (void *)qa;
-		msg.size	= sizeof(qa);
-#else
 		command cmd;
 		cmd.command = CMD_SET_CONFIGURATION;
 		cmd.data_len = 10;
@@ -824,911 +476,31 @@ void periodicTask(void)
 		msg.timeStamp = 0;
 		msg.data	= &cmd;
 		msg.size	= sizeof(cmd);
-#endif
-
 			
 		pCmdComm->send(&msg);
-//		cout << "JPos: " << endl << body_state.position_ << endl;
+//		cout << "JPos: " << endl << disp_q1 << endl;
 //		cout << "JPos: " << qav.transpose()  << endl;
 	}
 }
 
-#define STEP (M_PI*0.020) // Resolution 0.02PI = 3.6 deg
-//double mins[] = {	-80.,	-10,	-70,	 -10,	-60,	  0,	-20,	-40,	-40};
-//double maxs[] = {	 80.,	 40,	180,	130,	 60,	100,	200,	 40,	 40};
-VectorXd Mins;
-VectorXd Maxs;
-// Nominal Joint Limits
-double mins[] = {	-90.,	-20,	
-					-80,	-25,	-85,	  0,	-48,	-60,	-60,
-					-80,   -150,	-85,	  0,	-48,	-60,	-60};
-double maxs[] = {	 90.,	 43,	
-					200,	150,	 85,	133,	230,	 60,	 60,
-					200,	 25,	 85,	133,	230,	 60,	 60};
-// Actual Joint Limits
-//double mins[] = {	-90.,	-22,	-80,	-23,	-85,	  0,	-48,	-60,	-60};
-//double maxs[] = {	 90.,	 49,	200,	150,	 85,	133,	230,	 60,	 60};
-template <int T>
-double project2( const Node<T> *p, Node<T> *np );
-
-template <int T>
-double project1( Node<T> &np );
-
-void *plan(void *)
+static int robot_state;
+void setRobotState(int st)
 {
-	fprintf(stderr, "Planning Thread Started...\n");
-	int i;
-	Mins = Maxs = VectorXd::Zero(DOF);
-	for ( i = 0 ; i < DOF ; i++ )
-	{
-		Mins(i) = mins[i] * M_PI / 180.;
-		Maxs(i) = maxs[i] * M_PI / 180.;
-	}
-	cerr << "PRM init" << endl;
-	prm = new PRM<DOF>(Mins, Maxs, STEP);
-	cerr << "PRM init done" << endl;
-	WbcNode::mins = Mins;
-	WbcNode::maxs = Maxs;
-
-	while (1)
-	{
-		int next_count = 1000;
-
-		//////////////////////////////////
-		// Start generating sampling tree
-		//////////////////////////////////
-		rrt = new WbcRRT(Mins, Maxs, STEP);
-		rrt->nodeCreator = WbcNode::create;
-		prm->init();
-#if 0
-		Node<DOF> *newNode = new Node<DOF>;
-
-		newNode->q = body_state.position_;
-		newNode->getProjection();
-		newNode->parent = NULL;
-		rrt->nodes[rrt->numNodes++] = newNode;
-#else
-		rrt->reset();
-		rrt->nodes[0]->q = getQa(disp_q1); // body_state.position_;
-		for ( int i = 0 ; i < DOF ; i++ )
-		{
-			rrt->qs[0][i] = rrt->nodes[0]->q(i);
-		}
-		
-#ifdef USE_WBC
-		((WbcNode *)rrt->nodes[0])->getProjection();
-		q0 = getQ(body_state.position_);
-#endif
-#endif
-
-		r0.clear();
-
-		int count = 0;
-
-		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(q);
-		elbow0 = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
-		for ( int j = 0 ; j < 10 ; j++ )
-		{
-			r0.push_back(myModel.joints[j].getGlobalPos(myModel.joints[j].com));
-		}
-		pthread_mutex_unlock(&link_mutex);
-
-		fprintf(stderr, "Start Planning... %d,%d\n", rrt->numNodes, rrt->numEdges);
-		cerr << q0.transpose() << endl;
-		numSamples = 0;
-		while (bPlan)
-		{
-			bPlanning = true;
-
-			rrt->iterate();
-//			prm->addNode(project1);
-
-	//		usleep(1000);
-			{
-				if ( rrt->numNodes > next_count )
-				{
-					fprintf(stderr, "%d nodes added\n", rrt->numNodes);	
-					WbcNode *p = (WbcNode *)(rrt->nodes[rrt->numNodes-1]);
-
-					cerr << p << endl;
-					cerr << p->q.transpose() << endl;
-					cerr << "Actual " << p->actual.transpose() << endl;
-					cerr << *rrt << endl;
-					disp_q2 = getQ(p->q);
-
-					pthread_mutex_lock(&mutex);
-					qp1.clear();
-					qp1.push_back(getQ(p->q));
-					pthread_mutex_unlock(&mutex);
-					next_count += 1000;
-				}
-				count++;
-
-			}
-		}
-		bPlanning = false;
-		pushing = false;
-		numSamples = rrt->numNodes;
-
-		cerr << "Total " << rrt->numNodes << " added" << endl;
-		bRandom = false;
-
-		while (!bPlan)
-		{
-			if ( bRandom && rrt->numNodes > 1 )
-			{
-				Timestamp ts1("Path Planning Time");
-				ts1.setMode(Timestamp::MODE_SHOW_MSEC | Timestamp::MODE_OVERLAP);
-				ts1.setBaseline();
-
-				pthread_mutex_lock(&mutex);
-				qp1.clear();
-				qp2.clear();
-				dist.clear();
-				distp.clear();
-
-#define dD (0.01)
-				int from = 0;
-	//			int from = (int)((double)rand() * (double)rrt->numNodes / RAND_MAX);
-				int to;
-				
-				if ( goalIdx < 0 )
-					to = (int)((double)rand() * (double)rrt->numNodes / RAND_MAX);
-				else
-					to = goalIdx;
-//					from = rrt->numNodes-1;
-//					to = 0;
-				fprintf(stderr, "NODE %d->%d/%d\n", from, to, rrt->numNodes);
-				WbcPath path(rrt->nodes[from], rrt->nodes[to]);
-				path.step = 0.01*M_PI;
-				path.optimize(100);
-	//			path.optimize(NULL, 10);
-
-				ts1.checkElapsed(0);
-				Node<DOF> *p = rrt->nodes[rrt->numNodes-1];
-				cerr << "Optimal path " << path.numNewNode << " nodes" << endl;
-				for ( int i = 0 ; i < path.numNewNode ; i++ )
-				{
-					VectorXd q_plan= path.newNodes[i]->q;
-					VectorXd Q;
-#if 0
-					Q = VectorXd::Zero(10);
-					for ( int i = 0 ; i < DOF ; i++ )
-					{
-						Q(qmap[i]) = q_plan(i);
-					}
-					Q(2) = Q(1);
-#else
-					Q = getQ(q_plan);
-#endif
-					qp1.push_back(Q);
-#ifdef USE_WBC
-					((WbcNode *)path.newNodes[i])->getProjection();
-#endif
-//					cerr << getPotential(push_type, elbow0, (const WbcNode&)*(path.newNodes[i]), r0) << endl;
-
-					// Derive elbow location to get distance
-					pthread_mutex_lock(&link_mutex);
-					myModel.updateState(Q);
-					VectorXd elbow = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
-					VectorXd dv;
-					double dd;
-					dv = elbow - elbow0;
-					dd = dv.norm();
-					dist.push_back(dd);
-					if ( distp.size() > 0 && dd < distp.back() + dD ) 
-						distp.push_back(distp.back() + dD);
-					else
-						distp.push_back(dd);
-					pthread_mutex_unlock(&link_mutex);
-				}
-				int i;
-
-//				for ( i = 0 ; i < dist.size() ; i++ )
-//					cerr << dist[i] << endl;
-//				cerr << endl << endl;
-//				for ( i = 0 ; i < distp.size() ; i++ )
-//					cerr << distp[i] << endl;
-				ts1.checkElapsed(1);
-
-				double d_max = dist.back();
-				d_t.clear();
-				d_t.resize(500);
-				eta.clear();
-				eta.resize(500);
-				for ( i = 0 ; i < 500 ; i++ )
-				{
-					double t = i * 0.01;
-					d_t[i] = d_max * ( 1. - exp(-2.5*t));
-				}
-
-				eta[0] = 0;
-				int index = 1;
-				for ( i = 1 ; i < 500 ; i++ )
-				{
-					double d = d_t[i];
-
-					while ( index < 500 && d > distp[index] )
-						index++;
-
-					eta[i] = 0.;
-					if ( index < 499 )
-					{
-						double difference = d - distp[index-1];
-						double gap = distp[index] - distp[index-1];
-						double ratio = difference / gap;
-
-						if (gap <= 0. && ( ratio >= 1 || ratio < 0 ) )
-						{
-							assert(0);
-						}
-
-						eta[i] = index + ratio - 1;
-					}
-					else
-						eta[i] = 500-1;
-						
-				}
-
-#if 0
-#if 1
-				cerr << "d_t" << endl;
-				for ( i = 0 ; i < 500 ; i++ )
-				{
-					int idx = (int)eta[i];
-					double ratio = eta[i] - idx;
-					double value1, value2;
-
-					if ( index < 499 )
-					{
-						value1 = (1.-ratio) * dist[idx] + ratio * dist[idx+1];
-						value2 = (1.-ratio) * distp[idx] + ratio * distp[idx+1];
-					}
-					else
-					{
-						value1 = dist[idx];
-						value2 = distp[idx];
-					}
-
-					VectorXd Q = interpolate(qp1, eta[i]);
-
-					pthread_mutex_lock(&link_mutex);
-					myModel.updateState(Q);
-					VectorXd elbow = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
-					pthread_mutex_unlock(&link_mutex);
-
-
-					VectorXd dv;
-					double dd;
-					dv = elbow - elbow0;
-					dd = dv.norm();
-
-					cerr << eta[i] << "  " << value1 << " " << value2 << " " << dd << endl;
-				}
-#else
-				cerr << "eta" << endl;
-				for ( int i = 0 ; i < 500 ; i++ )
-					cerr << eta[i] << endl;
-#endif
-#endif
-
-				cerr << "Original path " << path.numNode << " nodes" << endl;
-				for ( int i = 0 ; i < path.numNode ; i++ )
-				{
-					VectorXd q_plan= path.nodes[i]->q;
-					VectorXd Q;
-#if 0
-					Q = VectorXd::Zero(10);
-					for ( int i = 0 ; i < DOF ; i++ )
-					{
-						Q(qmap[i]) = q_plan(i);
-					}
-					Q(3) = Q(2);
-#else
-					Q = getQ(q_plan);
-#endif
-					qp2.push_back(Q);
-#if 0
-					cerr << value[(*it).index] << " > ";
-
-					double val = getPotential(0, VectorXd::Zero(3), Q, r0);
-					cerr << "(" << val << ")"; 
-#endif
-#ifdef USE_WBC
-					((WbcNode *)path.nodes[i])->getProjection();
-#endif
-//					cerr << getPotential(push_type, elbow0, (const WbcNode&)*(path.nodes[i]), r0) << endl;
-				}
-				pthread_mutex_unlock(&mutex);
-				bRandom = false;
-				ts1.checkElapsed(2);
-
-				cerr << ts1;
-			}
-			usleep(10);
-		}
-
-		delete rrt;
-		cerr << "Reset Plan" << endl;
-	}
-}
-
-
-template <int T>
-double project1( Node<T> *np )
-{
-	VectorXd dq0;
-	VectorXd dq;
-	VectorXd dst = np->q;
-
-	assert(np->q.rows() == T);
-
-	int trial;
-	double err = 1.e10;
-
-	bool violate = true;
-	for ( trial = 100 ; trial >= 0 ; trial-- )
-	{
-#ifdef USE_WBC
-		np->getProjection();
-#endif
-
-
-//	cerr << "New Node" << np->q.transpose()*180./M_PI << endl;
-
-
-		VectorXd diff1 = desired_pos - np->actual;
-		err = diff1.norm();
-
-//	cerr << p.q.transpose() << endl;
-//	cerr << err << endl;
-#if 1
-		if ( err <= 0.01 && !violate )
-			break;
-
-		cerr << err << "->";
-
-		VectorXd modified;
-//		cerr << "From  : " << p.q.transpose()<<endl;
-//		cerr << "Before: " << np->q.transpose()<<endl;
-//		modified = np->q + np->traction * diff1 + np->projection * diff2;
-		modified = np->q + np->traction * diff1;
-		np->q = modified;
-
-		VectorXd diff2 = prm->center - np->q;
-		for ( int i = 0 ; i < T ; i++ )
-		{
-			if ( diff2[i] > M_PI )
-				diff2[i] -= 2.*M_PI;
-			if ( diff2[i] < -M_PI )
-				diff2[i] += 2.*M_PI;
-		}
-		np->q = prm->center - diff2;
-		np->getProjection();
-		MatrixXd weight = prm->weight;
-		violate = false;
-		for ( int i = 0 ; i < T ; i++ )
-		{
-			if ( (np->q(i) < Mins[i]) || (np->q(i) > Maxs[i]) )
-			{
-				violate = true;
-				break;
-			}
-			else
-			{
-				weight(i,i) = 0.;
-			}
-		}
-		modified = np->q + np->projection * weight * diff2;
-		np->q = modified;
-//		cerr << "After : " << np->q.transpose()<<endl;
-//		np->getProjection();
-#endif
-	}
-	if ( err > 0.01 || violate )
-	{
-		cerr << "Failed" << endl;
-		return -1.;
-	}
-
-	cerr << "Found" << endl;
-
-#if 0
-	VectorXd diff = np->q - prm->center;
-	for ( int i = 0 ; i < T ; i++ )
-	{
-		if ( diff[i] > M_PI )
-			diff[i] -= 2.*M_PI;
-		if ( diff[i] < -M_PI )
-			diff[i] += 2.*M_PI;
-	}
-	np->q = prm->center + diff;
-
-	violate = true;
-	MatrixXd weight = prm->weight;
-	for ( trial = 100 ; trial >= 0 && violate == true; trial-- )
-	{
-		VectorXd modified;
-		VectorXd diff2;
-
-
-		np->getProjection();
-		diff2 = prm->center - np->q;
-
-		modified = np->q + np->projection * weight * diff2;
-		np->q = modified;
-
-		violate = false;
-		VectorXd q = np->q;
-		weight = prm->weight;
-		for ( int i = 0 ; i < T ; i++ )
-		{
-			if ( (q(i) < Mins[i]) || (q(i) > Maxs[i]) )
-			{
-				violate = true;
-				break;
-			}
-			else
-			{
-				weight(i,i) = 0.;
-			}
-		}
-	}
-#if 1
-	if ( violate )
-	{
-		cerr << "Mins  : " << Mins.transpose()*180./M_PI << endl;
-		cerr << "EXCEED: " << np->q.transpose()*180./M_PI << endl;
-		cerr << "Maxs  : " << Maxs.transpose()*180./M_PI << endl;
-		err = -1.;
-	}
-#endif
-#endif
-
-	return err;
-}
-
-template <int T>
-double project2( const Node<T> *_p, Node<T> *_np )
-{
-	WbcNode *p, *np;
-	VectorXd dq0;
-	VectorXd dq;
-	VectorXd dst;
-
-	p = (WbcNode *)_p;
-	np = (WbcNode *)_np;
-
-	dst = np->q;
-
-	assert(np->q.rows() == T);
-	assert(p->q.rows() == T);
-	dq0 = np->q - p->q;
-//	double mag0 = dq0.norm();
-
-	dq = p->projection * dq0;
-
-	double mag = dq.norm();
-
-//	if ( mag < STEP && mag < mag0/2. )
-//		return -1.;
-
-	if ( dq0.transpose() * dq < 0)
-	{
-		cerr << "ERROR!!!: " << dq0.transpose() << ":" << dq.transpose() << endl;
-		cerr << p->projection << endl;
-		assert(0);
-	}
-
-	dq = dq * STEP / mag;
-
-	np->q	= p->q + dq;
-
-	VectorXd qdeg = np->q * 180. / M_PI;
-#ifdef CHECK_LIMIT
-	for ( int i = 0 ; i < T ; i++ )
-	{
-#if 0
-		if ( qdeg(i) < mins[i] ) 
-			np->q(i) = mins[i]*M_PI/180.;
-		if ( qdeg(i) > maxs[i] )
-			np->q(i) = maxs[i]*M_PI/180.;
-#else
-		if ( (qdeg(i) < mins[i]) || (qdeg(i) > maxs[i]) )
-		{
-//			cerr << "FRM:    " << p.q.transpose()*180./M_PI << endl;
-//			cerr << "EXCEED: " << qdeg.transpose() << endl;
-//			cerr << "DES:    " << dst.transpose()*180./M_PI << endl;
-			return -1.;
-		}
-
-#endif
-	}
-#endif
-//	cerr << "New Node" << np->q.transpose()*180./M_PI << endl;
-
-#ifdef USE_WBC
-	np->getProjection();
-#endif
-
-	VectorXd diff = desired_pos - np->actual;
-	double err = diff.norm();
-
-
-//	cerr << p.q.transpose() << endl;
-//	cerr << err << endl;
-	if ( err > 0.05 )
-	{
-
-//		cerr << "New   : " << np->actual.transpose() << endl;
-//		cerr << "Error : " << diff.transpose() << endl;
-//		cerr << "DES   : " << desired_pos.transpose() << endl;
-
-		return -2.;
-	}
-#if 1
-	else if ( err > 0.01 )
-	{
-		VectorXd modified;
-//		cerr << "From  : " << p.q.transpose()<<endl;
-//		cerr << "Before: " << np.q.transpose()<<endl;
-		modified = np->q + np->traction * diff;
-		np->q = modified;
-//		cerr << "After : " << np.q.transpose()<<endl;
-//		np->getProjection();
-	}
-#endif
-
-	return mag;
-}
-
-//VectorXd pushError;
-int pushType;
-Timestamp pushTimestamp;
-void push(VectorXd dir)
-{
-	int i, j ;
-
-	if ( bPlanning )
+	if ( st & robot_state )
 		return;
 
-	pushTimestamp = Timestamp("Push Check");
-	pushTimestamp.setBaseline();
-	pushTimestamp.setMode(Timestamp::MODE_OVERLAP | Timestamp::MODE_SHOW_MSEC);
-
-	if ( !rrt || rrt->numNodes == 0 )
+	robot_state |= st;
+}
+void clearRobotState(int st)
+{
+	if ( st & (~robot_state) )
 		return;
 
-	if ( dir(0) > 0.03 )
-		push_type = 1;
-	else if ( dir(1) < -0.03 )
-		push_type = 2;
-	else if ( dir(2) > 0.03 )
-		push_type = 3;
-	else
-		return;
-	pushType = push_type;
-
-	VectorXd contact = elbow0;
-
-	cerr << "Start Pushing... " << contact.transpose() << " : " << dir.transpose() << " " << push_type << endl;
-
-	double	max = -100000.;
-	int		max_idx = 0;
-
-	cerr << contact.transpose() << endl;
-	cerr << q0.transpose() << endl;
-	value = (double *)malloc(sizeof(double)*rrt->numNodes);
-
-	Timestamp ts0("Total Time"), ts1("Check Potential");
-	ts0.setMode(Timestamp::MODE_SHOW_SEC);
-	ts1.setMode(Timestamp::MODE_SHOW_USEC | Timestamp::MODE_SHOW_COUNT);
-	ts0.setBaseline();
-	pthread_mutex_lock(&mutex);
-	ts0.checkElapsed(0);
-	for ( i = rrt->numNodes-1 ; i >= 0 ; i-- )
-//	for ( i = 0 ; i < rrt->numNodes ; i++ )
-	{
-		ts1.setBaseline();
-		ts0.checkElapsed(1);
-		WbcNode *pNode = (WbcNode *)rrt->nodes[i];
-		VectorXd Q = getQ(pNode->q);
-
-		double sum = getPotential(push_type, contact, *pNode, r0);
-		value[i] = sum;
-		
-		if ( sum > max )
-		{
-			max		= sum;
-			max_idx	= i;
-//			cerr << "MAX " << max_idx << ": " << max <<endl;
-//			cerr << Q.transpose() << endl;
-//			cerr << q0.transpose() << endl;
-		}
-		ts1.checkElapsed(0);
-	}
-	ts0.checkElapsed(2);
-	pthread_mutex_unlock(&mutex);
-	cerr << "MAX " << max_idx << ": " << max << " " << i << endl;
-	cerr << ts0;
-	cerr << ts1;
-
-	bRandom = true;;
-	goalIdx = max_idx;
-	tickCount = 0;
+	robot_state &= ~st;
 }
 
-double sgn(double in)
+int getRobotState(void)
 {
-	if ( in > 0. )
-		return 1.;
-	else if ( in < 0. )
-		return -1.;
-	return 0.;
+	return robot_state;
 }
 
-bool getPotentialVerbose = false;
-double getPotential(int mode, const VectorXd &contact, const WbcNode &node, const vector<VectorXd>& r0)
-{
-	int j;
-	double sum = 0.;
-	double weight[10] = {0.};
-	int mask[10] = {0};
-	double value[10];
-
-	weight[5] = 12.;
-	weight[6] = 12.;
-	weight[7] = 12.;
-	mask[5] = 1;
-	mask[6] = 1;
-	mask[7] = 1;
-//	VectorXd r[10];
-
-	for ( j = 0 ; j < 10 ; j++ )
-	{
-		VectorXd d = node.coms[j] - contact;
-//		VectorXd d = r[j] - contact;
-		
-		if ( mask[j] )
-		{
-			switch (mode)
-			{
-			case 1:
-				value[j] = weight[j] * d(0) * myModel.joints[j].mass; // X-
-				break;
-			case 2:
-				value[j] = - weight[j] * d(1) * myModel.joints[j].mass; // Y-
-				break;
-			case 3:
-				value[j] = weight[j] * d(2) * myModel.joints[j].mass; // Z+
-				break;
-			}
-			if ( getPotentialVerbose )
-			{
-				cerr << d.transpose() << ":" << myModel.joints[j].mass << "(" << value[j] << ")" << endl;
-			}
-		}
-		else
-		{
-			value[j] = - sqrt(((r0[j] - node.coms[j]).transpose() * (r0[j] - node.coms[j]))(0)) * myModel.joints[j].mass;
-//			value[j] = - sqrt(((r0[j] - r[j]).transpose() * (r0[j] - r[j]))(0)) * myModel.joints[j].mass;
-			if ( getPotentialVerbose )
-			{
-				cerr << (r0[j]-node.coms[j]).transpose() << ":" << myModel.joints[j].mass << "(" << value[j] << ")" << endl;
-//				cerr << (r0[j]-r[j]).transpose() << ":" << myModel.joints[j].mass << "(" << value[j] << ")" << endl;
-			}
-		}
-	}
-
-	sum = 0;
-	for ( j = 0 ; j < 10 ; j++ )
-	{
-//		if ( getPotentialVerbose )
-//			cerr << value[j] << ":" << myModel.joints[j].mass << " ";
-		sum += value[j];
-	}
-//	if ( getPotentialVerbose )
-//		cerr << endl;
-
-	return sum;
-}
-
-void intervention(void)
-{
-	int i, j, num;
-	double ddmin[2] = {1e10, 1e10}, dmin;
-	int  idxmin[2] = {0};
-	VectorXd d, q;
-
-	num = rrt->numNodes;
-	cerr << "Check " << num << " nodes" << endl;
-	int link[] = {5,3};
-	for ( j = 0 ; j < 2 ; j++ )
-	for ( i = 0 ; i < num ; i++ )
-	{
-		double dd;
-
-		q =	getQ(rrt->nodes[i]->q);
-		myModel.updateState(q);
-		d = gGoal - myModel.joints[link[j]].getGlobalPos(VectorXd::Zero(3));
-		dd = d.transpose()*d;
-		if ( ddmin[j] > dd )
-		{
-			ddmin[j] = dd;
-			idxmin[j] = i;
-		}
-	}
-
-	int idx;
-	if ( ddmin[0] > ddmin[1] )
-	{
-		dmin = sqrt(ddmin[1]);
-		idx = idxmin[1];
-	}
-	else
-	{
-		dmin = sqrt(ddmin[0]);
-		idx = idxmin[0];
-	}
-	cerr << "Collision anticipation " << gGoal.transpose() << endl;
-	cerr << "closest point " << idx << " " << dmin << endl;
-//	q =	getQ(rrt->nodes[idxmin]->q);
-//	myModel.updateState(q);
-
-	bRandom = true;;
-	goalIdx = idx;
-	tickCount = 0;
-}
-
-void intervention2(void)
-{
-	int i, j, num;
-	double nmax[2] = {0., 0.};
-	double inner;
-	double min_dd = 1e10;
-	int  idxmax[2] = {-1, -1};
-	VectorXd q;
-	Vector3d n, d, pos;
-	double maxinner;
-
-	n = gObjVel / sqrt((gObjVel.transpose()*gObjVel)(0));
-	maxinner = (n.transpose() * (gGoal - gObj))(0);
-
-	num = rrt->numNodes;
-	cerr << "Check " << num << " nodes" << endl;
-	int link[] = {5,3};
-	for ( j = 0 ; j < 2 ; j++ )
-	for ( i = 0 ; i < num ; i++ )
-	{
-		double dd;
-
-		q =	getQ(rrt->nodes[i]->q);
-		myModel.updateState(q);
-		pos = myModel.joints[link[j]].getGlobalPos(VectorXd::Zero(3));
-		inner = ((pos-gObj).transpose()*n)(0);
-		d = pos - gObj - inner*n;
-		dd = d.transpose()*d;
-		if ( inner > maxinner )
-			continue;
-#if 1
-		if ( min_dd > dd )
-		{
-			min_dd = dd;
-//			idxmax[j] = i;
-		}
-#endif
-#if 1
-		if ( dd > 0.01 ) 
-			continue;
-		if ( nmax[j] < inner )
-		{
-			nmax[j] = inner;
-			idxmax[j] = i;
-		}
-#endif
-	}
-
-	int idx;
-	if ( nmax[0] < nmax[1] )
-	{
-		inner = sqrt(nmax[1]);
-		idx = idxmax[1];
-	}
-	else
-	{
-		inner = sqrt(nmax[0]);
-		idx = idxmax[0];
-	}
-	cerr << "Collision anticipation " << gGoal.transpose() << endl;
-	cerr << "closest point " << idx << " " << inner << " " << min_dd << nmax[0] << ":" << nmax[1] << endl;
-//	q =	getQ(rrt->nodes[idxmin]->q);
-//	myModel.updateState(q);
-
-	if ( idx >= 0 )
-	{
-		bRandom = true;;
-		goalIdx = idx;
-		tickCount = 0;
-	}
-}
-
-#define OCTREE_DEPTH (5)
-class TaskCell : public OctreeEntry
-{
-	vector<int>		qs;
-	int				sizeIndex;
-	int				*index;
-	unsigned int	neighbor;			
-	virtual void	absorb(OctreeEntry *other);
-
-public:
-	TaskCell(void);
-	int				numIndex;
-	int				addIndex(int idx);
-};
-
-TaskCell::TaskCell(void)
-{
-	index		= NULL;
-	neighbor	= 0;
-	sizeIndex	= 0;
-	numIndex	= 0;
-}
-
-#define DEFAULT_INDEX_SIZE (1000)
-int TaskCell::addIndex(int idx)
-{
-	if ( index == NULL )
-	{
-		index = (int *)malloc(DEFAULT_INDEX_SIZE*sizeof(int));
-		sizeIndex = DEFAULT_INDEX_SIZE;
-	}
-
-	if ( numIndex == sizeIndex-1 )
-	{
-		int *temp;
-		temp = index;
-		index = (int *)malloc(2*sizeIndex*sizeof(int));
-		memcpy(index, temp, sizeIndex*sizeof(int));
-		sizeIndex *= 2;
-		free(temp);
-	}
-
-	index[numIndex] = idx;
-	numIndex++;
-
-	return numIndex;
-}
-
-void TaskCell::absorb(OctreeEntry *other)
-{
-}
-
-void addToOctree(WbcNode *node)
-{
-	VectorXd x;
-	VectorXd q;
-
-	q = getQ(node->q);
-	
-//	cerr << "add to octree" << node->q << endl;
-
-	if ( node == NULL )
-		return;
-
-	pthread_mutex_lock(&link_mutex);
-	myModel.updateState(q);
-
-	for ( int i = 1 ; i < myModel.numJoints ; i++ )
-	{
-		x = myModel.joints[i].getGlobalPos(VectorXd::Zero(3));
-		TaskCell *cell = new TaskCell;
-		cell->x = x[0];
-		cell->y = x[1];
-		cell->z = x[2];
-		TaskCell *entry = (TaskCell*)base_octree[i-1]->addEntry(cell, OCTREE_DEPTH);
-		entry->addIndex(node->index);
-	}
-	pthread_mutex_unlock(&link_mutex);
-}

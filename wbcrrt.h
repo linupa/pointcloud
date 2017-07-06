@@ -3,11 +3,11 @@
 
 #ifdef USE_WBC
 #include <boost/scoped_ptr.hpp>
-using namespace boost;
 #include <jspace/Model.hpp>
 #include <jspace/State.hpp>
 #include <jspace/test/sai_util.hpp>
 #include <jspace/pseudo_inverse.hpp>
+using namespace boost;
 using namespace jspace;
 #endif
 #include <Eigen/Eigen>
@@ -24,19 +24,24 @@ using Eigen::VectorXd;
 #include "rrt.hpp"
 #include "kin.h"
 
+typedef RRT<DOF> WbcRRT;
+
 class WbcNode : public Node<DOF>
 {
 public:
 	MatrixXd	projection;
 	MatrixXd	traction;
 	VectorXd	actual;
-	VectorXd 	coms[LINKS];
+	Vector3d 	coms[LINKS];
+	State 		state;
 
 	virtual	WbcNode &operator=(const WbcNode &src);
 	virtual	WbcNode &operator=(const Node<DOF> &src);
 	virtual double distance(const Node<DOF> *p2);
 	virtual double distance2(const Node<DOF> *p2);
 	virtual Node<DOF> *copy(void) const;
+
+	VectorXd &setState(const VectorXd &v);
 
 	WbcNode(void);
 	WbcNode(const double min, const double max);

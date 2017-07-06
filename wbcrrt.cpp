@@ -11,6 +11,8 @@
 
 #include "wbcrrt.h"
 #include "model.h"
+#include "wbc.h"
+
 #define CHECK_LIMIT
 
 using namespace std;
@@ -20,13 +22,7 @@ using namespace boost;
 using namespace jspace;
 #endif
 
-extern VectorXd desired_pos;
-extern pthread_mutex_t	model_mutex;
-extern pthread_mutex_t	link_mutex;
 extern VectorXd getQ(const VectorXd &uq);
-extern KinModel myModel;
-extern void addToOctree(WbcNode &node);
-
 #ifdef USE_WBC
 scoped_ptr<jspace::Model> WbcNode::model;
 #endif
@@ -131,8 +127,7 @@ WbcNode& WbcNode::operator=(const Node<DOF> &src)
 }
 
 #ifdef USE_WBC
-extern State body_state;
-MatrixXd &WbcNode::getProjection(void)
+MatrixXd &WbcNode::getProjection()
 {
 	MatrixXd ainv;
 	MatrixXd Nc;
@@ -152,9 +147,8 @@ MatrixXd &WbcNode::getProjection(void)
 
 	Constraint *constraint;
 
-	State state = body_state;
 	state.position_ = q;
-	state.velocity_ = VectorXd::Zero(state.velocity_.rows());
+	state.velocity_ = VectorXd::Zero(state.position_.rows());
 
 	pthread_mutex_lock(&model_mutex);
 	model->update(state);
@@ -211,7 +205,7 @@ MatrixXd &WbcNode::getProjection(void)
 	VectorXd		Q = getQ(q);
 	pthread_mutex_lock(&link_mutex);
 	myModel.updateState(Q);
-	for ( j = 0 ; j < 10 ; j++ )
+	for ( j = 0 ; j < Q.rows() ; j++ )
 	{
 		coms[j] = myModel.joints[j].getGlobalPos(myModel.joints[j].com);
 	}
@@ -349,6 +343,14 @@ Node<DOF> *WbcNode::create(const VectorXd &min, const VectorXd &max)
 {
 	return (Node<DOF> *)new WbcNode(min, max);
 }
+
+VectorXd &WbcNode::setState(const VectorXd &v)
+{
+	q = v;
+	state.position_ = v;
+	state.velocity_ = VectorXd::Zero(v.rows());
+}
+
 
 WbcPath::WbcPath(void)
 {

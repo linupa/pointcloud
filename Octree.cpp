@@ -279,6 +279,43 @@ void Octree::getLineDistance(double *coeff, double threshold)
 	}
 }
 
+// dir should be normalized
+void Octree::getLineDistance(const Vector3d &point, const Vector3d &dir, double threshold)
+{
+	if ( entry )
+		OctreeEntryList::addEntry(entry);
+
+	if ( child[0] )
+	{
+		double th, th2;
+
+		th = len/sqrt(2.) + threshold;
+		th2 = th*th;
+		
+		for ( int i = 0 ; i < 8 ; i++ )
+		{
+			Vector3d ch, diff;
+			double inner;
+			double distance;
+			double ii, jj, kk;
+
+			ch[0] = child[i]->x;
+			ch[1] = child[i]->y;
+			ch[2] = child[i]->z;
+
+			inner = (ch - point).transpose() * dir;
+
+			diff = (ch - point) - inner*dir;
+
+			distance = diff.transpose() * diff;
+
+			if ( distance < th2 )
+				child[i]->getLineDistance(point, dir, threshold);
+		}
+	}
+}
+
+
 void Octree::getPointDistance(double *pos, double threshold)
 {
 	if ( entry )

@@ -196,7 +196,7 @@ public:
 	virtual double findPath( const Node<T> &node );
 	Node<T>* findNearest(const Node<T> &node, double min);
 	int findIndex(int dim, double val);
-	void reset(void);
+	void reset(const VectorXd &root);
 	virtual ostream &dump(ostream &);
 	virtual void addNode(Node<T> *pNode);
 	bool checkBoundary(const Node<T> &node);
@@ -302,7 +302,7 @@ RRT<T>::~RRT(void)
 }
 
 template <int T>
-void RRT<T>::reset(void)
+void RRT<T>::reset(const VectorXd &root)
 {
 	int i;
 	for ( i = 0 ; i < numNodes ; i++ )
@@ -319,9 +319,10 @@ void RRT<T>::reset(void)
 	ts0.setBaseline();
 
 	Node<T>  *p_init = nodeCreator(VectorXd::Zero(T), VectorXd::Zero(T));
-	p_init->q = VectorXd::Zero(T);
+	p_init->q = root;
 
 	addNode(p_init);
+
 }
 
 template <int T>

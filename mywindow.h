@@ -1,5 +1,5 @@
-#ifndef _MY_SIM_H_
-#define _MY_SIM_H_
+#ifndef __MY_SIM_H__
+#define __MY_SIM_H__
 
 #include <vector>
 
@@ -56,7 +56,7 @@ public:
 	Fl_Button *planButton;
 	Fl_Button *randomButton;
 	Fl_Button *modeButton;
-	Fl_Button *baseButton;
+	Fl_Button *pathButton;
 	Fl_Button *learnBaseButton;
 	Fl_Button *sendButton;
 	Fl_Button *quitButton;
