@@ -9,6 +9,8 @@ enum {
 	STATE_LEARNING	= 0x00000200,
 	STATE_OPERATE	= 0x00010000,
 	STATE_OPERATING	= 0x00020000,
+	STATE_RETURN	= 0x00100000,
+	STATE_RETURNING	= 0x00200000,
 	STATE_SEND		= 0x01000000
 };
 void setRobotState(int st);
@@ -22,7 +24,6 @@ extern double ver;
 extern double scale;
 
 extern VectorXd disp_q1;
-extern VectorXd disp_q2;
 extern VectorXd q0;
 extern vector<VectorXd> qp1;
 extern vector<VectorXd> qp2;
@@ -45,12 +46,13 @@ extern Vector3d elbow;
 extern Vector3d endeffector;
 extern Vector3d desired_pos;
 extern vector<Vector3d> elbow_log;
+
 extern int goalIdx;
 extern double	gGoalTime;
 extern Vector3d gGoal;
+extern double gObjTime;
 extern Vector3d gObj;
 extern Vector3d	gObjVel;
-extern int pushType;
 
 extern pthread_mutex_t	mutex;
 extern pthread_mutex_t	model_mutex;

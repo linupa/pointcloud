@@ -98,7 +98,7 @@ void RVolume::addToOctree(WbcNode *node)
 		cell->x = x[0];
 		cell->y = x[1];
 		cell->z = x[2];
-		TaskCell *entry = (TaskCell*)base_octree[i-1]->addEntry(cell, OCTREE_DEPTH);
+		TaskCell *entry = (TaskCell*)base_octree[i-1]->addEntry((OctreeEntry *)cell, OCTREE_DEPTH);
 		entry->addIndex(node->index);
 	}
 	pthread_mutex_unlock(&link_mutex);

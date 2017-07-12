@@ -337,13 +337,15 @@ ostream &RRT<T>::dump(ostream &c)
 }
 
 template <int T>
-Node<T>* RRT<T>::findNearest(const Node<T> &node, double min)
+Node<T>* RRT<T>::findNearest(const Node<T> &node, double refmin)
 {
-	double min2, min2_opt;
+	double min2, min2_opt, refmin2;
 	Node<T> *ret, *ret_opt;
 	int index;
 	int i, j, k;
 	double nodeq[T];
+
+	refmin2 = refmin*refmin;
 
 	for ( i = 0 ; i < T ; i++ )
 	{
@@ -482,7 +484,7 @@ Node<T>* RRT<T>::findNearest(const Node<T> &node, double min)
 		{
 			minIdx = i;
 			min2 = dist;
-			if ( min2 < min*min )
+			if ( min2 < refmin2 )
 				break;
 		}
 	}
@@ -867,7 +869,7 @@ void Path<T>::optimize( int iteration )
 
 	success = fail = 0;
 
-	if ( numNode <= 1 )
+	if ( numNode <= 2 )
 		return;
 
 	newNodes = (Node<T> **)malloc(sizeof(Node<T> *) * numNode);

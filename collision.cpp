@@ -21,7 +21,6 @@ VectorXd getQa(const VectorXd &q);
 double getPotential(int mode, const Vector3d &contact, const WbcNode &node, const vector<Vector3d> &r0, const int verbose=0);
 
 //VectorXd pushError;
-int pushType;
 Timestamp pushTimestamp;
 void push(VectorXd dir)
 {
@@ -45,7 +44,6 @@ void push(VectorXd dir)
 		push_type = 3;
 	else
 		return;
-	pushType = push_type;
 
 	Vector3d contact = elbow0;
 

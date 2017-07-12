@@ -38,7 +38,6 @@ using Eigen::MatrixXd;
 
 // States
 VectorXd disp_q1;
-VectorXd disp_q2;
 
 double target_pos[2];
 int point_pressed = -1;
@@ -57,7 +56,6 @@ double speed = 0.;
 // Updated in draw every 30msec
 // Reset when pushed
 #define TICK_SEC (33)
-double seq; 
 int seq_ui = 0;
 int node_id = 0;
 int sample_ui = 0;
@@ -517,26 +515,24 @@ void drawOccupancy(Octree *tree)
 	VectorXd unit = VectorXd::Zero(3);
 	unit(0) = 1.;
 
-	pthread_mutex_lock(&mutex);
-	vector<VectorXd> *qp;
+//	pthread_mutex_lock(&mutex);
+//	vector<VectorXd> *qp;
 
 
-	if ( seq_ui > 0 )
-	{
-		seq = seq_ui-1;
-	}
-
-	VectorXd Q = disp_q1;
-
-
+//	if ( seq_ui > 0 )
+//	{
+//		seq = seq_ui-1;
+//	}
+//
+//	VectorXd Q = disp_q1;
 //	if ( qp->size() > 2 )
 //	{
 //		Q = interpolate(*qp, seq);
 //	}
-	if ( prm->numNodes > 0 && node_id > 0 )
-		Q = getQ(prm->nodes[node_id-1]->q);
-
-	pthread_mutex_unlock(&mutex);
+//	if ( prm->numNodes > 0 && node_id > 0 )
+//		Q = getQ(prm->nodes[node_id-1]->q);
+//
+//	pthread_mutex_unlock(&mutex);
 
 //	for ( ; it != qp->end() ; it++ )
 //	if ( qp->size() > 0 )
@@ -546,6 +542,26 @@ void drawOccupancy(Octree *tree)
 #endif
 
 		// Draw Skeleton of Plan
+		VectorXd disp_q2;
+		if ( sample_ui > 0 && sample_ui <= rrt->numNodes )
+			disp_q2 = getQ(rrt->nodes[sample_ui - 1]->q);
+		else if ( seq_ui > 0 )
+		{
+			Vector3d contact = elbow0;
+
+			pthread_mutex_lock(&mutex);
+			vector<VectorXd> *qp;
+			if ( bPath )
+				qp = &qp1;
+			else
+				qp = &qp2;
+			disp_q2 = (*qp)[seq_ui-1]; 
+			pthread_mutex_unlock(&mutex);
+		}
+		else
+			disp_q2 = VectorXd::Zero(LINKS);
+
+
 		pthread_mutex_lock(&link_mutex);
 		myModel.updateState(disp_q2);
 		myModel.checkCollision();
@@ -716,16 +732,24 @@ void drawOccupancy(Octree *tree)
 #endif
 	
 
+	double transparency;
+	double currentTime = Timestamp::getCurrentTime();
+
+	if ( currentTime - gObjTime < 0.5 )
+		transparency = 1.;
+	else
+		transparency = 1. / (currentTime - gObjTime);
+
 	// Intevention location
-	glColor3f(0.0, 1.0, 0.0);
+	glColor4f(0.0, 1.0, 0.0, transparency);
 	drawSphere(gObj, 0.05, 100);
 
-	glColor3f(1.0, 0.0, 0.0);
+	glColor4f(1.0, 0.0, 0.0, transparency);
 	glBegin(GL_LINES);
 	glVertex3f(gObj[0], gObj[1], gObj[2]);
 	glVertex3f(gObj[0]+gObjVel[0]*5, gObj[1]+gObjVel[1]*5, gObj[2]+gObjVel[2]*5);
 	glEnd();
-	glColor3f(1.0, 1.0, 0.0);
+	glColor4f(1.0, 1.0, 0.0, transparency);
 	glBegin(GL_LINES);
 	glVertex3f(gObj[0]+gObjVel[0]*5, gObj[1]+gObjVel[1]*5, gObj[2]+gObjVel[2]*5);
 	glVertex3f(gObj[0]+gObjVel[0]*10, gObj[1]+gObjVel[1]*10, gObj[2]+gObjVel[2]*10);
@@ -762,6 +786,7 @@ void drawOccupancy(Octree *tree)
 	else
 		octree_mask = 1<<octree_id;
 	Vector3d dir = gInterveneVel / gInterveneVel.norm();
+//	Vector3d dir = gObjVel / gObjVel.norm();
 	for ( int i = 0 ; i < 16 ; i++ )
 	{
 		glColor3f(color[i][0], color[i][1], color[i][2]);
@@ -783,11 +808,11 @@ void drawOccupancy(Octree *tree)
 			for ( int j = 0 ; j < OctreeEntryList::count ; j++ )
 			{
 				drawOccupancy(OctreeEntryList::list[j].pEntry->tree);
-				cerr<< OctreeEntryList::list[j].pEntry->tree->x << ":"
-					<< OctreeEntryList::list[j].pEntry->tree->y << ":"
-					<< OctreeEntryList::list[j].pEntry->tree->z << " "
+//				cerr<< OctreeEntryList::list[j].pEntry->tree->x << ":"
+//					<< OctreeEntryList::list[j].pEntry->tree->y << ":"
+//					<< OctreeEntryList::list[j].pEntry->tree->z << " "
 //					<< OctreeEntryList::list[j].pEntry->z << " " <<
-					<< endl;
+//					<< endl;
 			}
 		}
 	}
@@ -985,9 +1010,10 @@ timer_cb(void * param)
 
 	periodicTask();
 
-	static int count = 0;
+	const double scr_dt = 0.03;
+	static double acc = 0.;
 
-	if ( (count % 30) == 0 )
+	if ( acc >= scr_dt )
 	{
 //		myModel.update();
 
@@ -997,8 +1023,9 @@ timer_cb(void * param)
 //		traceZ.push_back(z);
 
 		reinterpret_cast<MyWindow*>(param)->sim->redraw();
+		acc = 0.;
 	}
-	count++;
+	acc += dt;
 /*
 	if ( ! paused || ! paused_ready ) {
 		reinterpret_cast<Simulator*>(param)->tickCount();
@@ -1077,7 +1104,6 @@ cb_reset(Fl_Widget *widget, void *param)
 	clearRobotState(STATE_SIMUL);
 
 	disp_q1 = VectorXd::Zero(disp_q1.rows());
-	disp_q2 = VectorXd::Zero(disp_q2.rows());
 	qp1.clear();
 	qp2.clear();
 
@@ -1167,11 +1193,8 @@ cb_seq(Fl_Widget *widget, void *param)
 #ifdef USE_WBC
 		node.getProjection();
 #endif
-
-
-		disp_q2 = Q;
 		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(disp_q2);
+		myModel.updateState(Q);
 
 		vector<Vector3d> r0;
 		for ( int j = 0 ; j < 10 ; j++ )
@@ -1180,7 +1203,7 @@ cb_seq(Fl_Widget *widget, void *param)
 		}
 		pthread_mutex_unlock(&link_mutex);
 
-		double val = getPotential(pushType, contact, node, r0, 1);
+		double val = getPotential(0, contact, node, r0, 1);
 
 		cerr << seq_no << ": " << val << ":" << Q.transpose() * 180. / M_PI << endl;
 #endif

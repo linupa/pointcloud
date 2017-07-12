@@ -317,7 +317,17 @@ double WbcNode::project( Node<DOF> *_np, double step, double max ) const
 //	np->q	= this->q + (i-1)*step*ndq;
 
 #ifdef USE_WBC
-	np->getProjection();
+	if ( getRobotState() & (STATE_LEARNING|STATE_LEARN))
+		np->getProjection();
+	else
+	{
+		static int count = 0;
+		if ( (count%10) == 0 )
+			np->getProjection();
+		else
+			np->projection = projection;
+		count++;
+	}
 #endif
 //	np->q = np->q + np->traction * last_diff;
 
@@ -347,8 +357,10 @@ Node<DOF> *WbcNode::create(const VectorXd &min, const VectorXd &max)
 VectorXd &WbcNode::setState(const VectorXd &v)
 {
 	q = v;
+#ifdef USE_WBC
 	state.position_ = v;
 	state.velocity_ = VectorXd::Zero(v.rows());
+#endif
 }
 
 

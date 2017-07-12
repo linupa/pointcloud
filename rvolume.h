@@ -4,22 +4,23 @@
 #include <vector>
 #include "wbcrrt.h"
 #include "Octree.h"
-#define OCTREE_DEPTH (5)
+#define OCTREE_DEPTH (6)
 #define DEFAULT_INDEX_SIZE (1000)
 
 using namespace std;
 
 class TaskCell : public OctreeEntry
 {
+private:
 	vector<int>		qs;
 	int				sizeIndex;
-	int				*index;
 	unsigned int	neighbor;			
-	virtual void	absorb(OctreeEntry *other);
 
 public:
 	TaskCell(void);
+	virtual void	absorb(OctreeEntry *other);
 	int				numIndex;
+	int				*index;
 	int				addIndex(int idx);
 };
 

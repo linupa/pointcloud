@@ -44,13 +44,14 @@ int win_height(600);
 static char win_title[100];
 #ifdef USE_WBC
 static State body_state;
-extern void simulate(State &body_state);
+void simulate(State &body_state);
 #endif
 
 KinModel myModel;
 
 double		gGoalTime = 1e10;
 Vector3d	gGoal;
+double		gObjTime;
 Vector3d	gObj;
 Vector3d	gObjVel;
 vector<Vector3d> elbow_log;
@@ -61,15 +62,18 @@ void *plan(void *);
 
 int goalIdx = -1;
 VectorXd q0;
+extern int seq_ui;
 extern vector<double> eta;
+#ifdef Linux
 double dt = 0.001;
+#else
+double dt = 0.03;
+#endif
 Vector3d desired_pos;
-extern double seq; 
 //vector<Link>	myLocalLink;
 //vector<Link>	myGlobalLink;
 WbcRRT *rrt;
 PRM<DOF> *prm;
-extern int seq_ui;
 extern int sample_ui;
 #define FILE_NAME_SIZE (200)
 char joint_name[FILE_NAME_SIZE];
@@ -176,7 +180,7 @@ int main(int argc, char *argv[])
 		for ( i = 0 ; i < DOF+1 ; i++ )
 			q0[i] = q_init[i];
 	}
-	disp_q1 = disp_q2 = q0;
+	disp_q1 = q0;
 
 	cerr << "Model Init Done... " << endl;
 	myModel.updateState(disp_q1);
@@ -277,7 +281,8 @@ Vector3d	gInterveneVel;
 int qmap[] = {0,1,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
 void periodicTask(void)
 {
-
+	double seq = -1.;
+	double currentTime = Timestamp::getCurrentTime();
 
 	if ( !(getRobotState() & STATE_SIMUL) )
 	{
@@ -301,6 +306,7 @@ void periodicTask(void)
 		if ( (msg = pObjComm->read()).size > 0 )
 		{
 			double *pData = (double *)msg.data;
+			gObjTime	= currentTime;
 			gObj[0] = pData[0];
 			gObj[1] = pData[1];
 			gObj[2] = pData[2];
@@ -315,9 +321,9 @@ void periodicTask(void)
 		}
 
 		{
+#if 0
 			{
 				static double prevTime = 0;
-				double currentTime = Timestamp::getCurrentTime();
 				if ( prevTime + 5 < currentTime )
 				{
 					if ( gGoalTime < 5 )
@@ -334,6 +340,39 @@ void periodicTask(void)
 					}
 				}
 			}
+#else
+			{
+				static double prevTime = 0;
+				if ( !(getRobotState() & (STATE_OPERATE|STATE_OPERATING)) )
+				{
+					if ( gGoalTime < 5 )
+					{
+						gIntervenePos = gObj;
+						gInterveneVel = intervention2();
+
+						prevTime = currentTime;
+					}
+					else
+					{
+//						gIntervenePos = Vector3d::Zero();
+//						gInterveneVel = Vector3d::Zero();
+					}
+				}
+				else
+				{
+					double inner = gObjVel.transpose() * gInterveneVel;
+
+					if ( inner < 0 )
+					{
+						cerr << "===============================" << endl;
+						cerr << "Finalize intervention" << endl;
+						clearRobotState(STATE_OPERATE | STATE_OPERATING);
+						setRobotState(STATE_RETURN | STATE_RETURNING);
+						gInterveneVel = Vector3d::Zero();
+					}
+				}
+			}
+#endif
 		}
 
 		{
@@ -365,6 +404,58 @@ void periodicTask(void)
 
 			count++;
 		}
+		{
+			static int prevState = 0;
+			int state = getRobotState();
+			static int currentIdx = 0;
+
+			if ( state & STATE_OPERATING )
+			{
+				if ( !(prevState & STATE_OPERATING) )
+				{
+					Timestamp::resetTime();
+					currentIdx = 0;
+				}
+				double sec = Timestamp::getElapsedTime();
+				int idx = (int)(sec*100.);
+				seq = eta[idx];
+				seq = sec*30.;
+				if ( seq >= qp1.size()-1 )
+				{
+					seq = qp1.size()-1;
+				}
+
+			}
+			if ( state & STATE_RETURNING )
+			{
+				static double startIdx = -1;
+				if ( !(prevState & STATE_RETURNING) )
+				{
+					startIdx = seq;
+					cerr << "Returning " << startIdx << endl;
+					Timestamp::resetTime();
+				}
+				double sec = Timestamp::getElapsedTime();
+				seq = startIdx - sec*0.1;
+				if ( seq < 0 )
+				{
+					cerr << "Returned " << startIdx << " " << sec << endl;
+					seq = 0;
+					clearRobotState(STATE_RETURNING | STATE_RETURN);
+				}
+			}
+
+			if ( qp1.size() > 0 && seq >= 0 )
+			{
+				disp_q1 = interpolate(qp1, seq);
+			}
+
+			prevState = state;
+		}
+		if ( seq < 0. )
+			seq = 0.;
+		
+#if 0
 		if ( qp1.size() > 0 && eta.size() > 0 )
 		{
 			static int dest = 0;
@@ -390,11 +481,10 @@ void periodicTask(void)
 
 			disp_q1 = interpolate(qp1, seq);
 		}
-		else
-			clearRobotState(STATE_OPERATING);
+#endif
 
-		if ( sample_ui > 0 && sample_ui <= rrt->numNodes )
-			disp_q2 = getQ(rrt->nodes[sample_ui - 1]->q);
+//		if ( sample_ui > 0 && sample_ui <= rrt->numNodes )
+//			disp_q2 = getQ(rrt->nodes[sample_ui - 1]->q);
 
 		if ( !(getRobotState() & STATE_LEARNING) )
 		{
@@ -405,6 +495,11 @@ void periodicTask(void)
 
 			desired_pos = node.actual;
 #else
+			if (disp_q1.rows() != LINKS)
+			{
+				cerr << disp_q1.rows() << endl;
+				assert(0);
+			}
 			myModel.updateState(disp_q1);
 			VectorXd p = VectorXd::Zero(3);
 			p(1) = -0.05;
@@ -444,6 +539,19 @@ void periodicTask(void)
 	}
 #endif
 
+#if 0
+	{
+		static double prevTime = 0;
+
+		if ( prevTime + 1. < currentTime )
+		{
+			fprintf(stderr, "%f %08x\n", getRobotState());
+			prevTime = currentTime;
+		}
+
+	}
+#endif
+
 	{
 		Message msg;
 		double dat[DOF+1];
@@ -457,12 +565,13 @@ void periodicTask(void)
 		pKinComm->send(&msg);
 	}
 
-	if ( (getRobotState() & STATE_SEND) && qp1.size() > 2 )
+	if ( (getRobotState() & STATE_SEND && qp1.size() > 2 ) )
 	{
 		Message msg;
 		VectorXd qav;
 
 		VectorXd q = interpolate(qp1, seq);
+		seq_ui = seq + 1;
 		qav = getQa(q);
 		
 		command cmd;
@@ -486,15 +595,15 @@ void periodicTask(void)
 static int robot_state;
 void setRobotState(int st)
 {
-	if ( st & robot_state )
-		return;
+//	if ( (st & robot_state) == st )
+//		return;
 
 	robot_state |= st;
 }
 void clearRobotState(int st)
 {
-	if ( st & (~robot_state) )
-		return;
+//	if ( (st & (~robot_state)) == st )
+//		return;
 
 	robot_state &= ~st;
 }

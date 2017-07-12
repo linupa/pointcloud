@@ -289,7 +289,7 @@ void Octree::getLineDistance(const Vector3d &point, const Vector3d &dir, double 
 	{
 		double th, th2;
 
-		th = len/sqrt(2.) + threshold;
+		th = len/(sqrt(2.)) + threshold;
 		th2 = th*th;
 		
 		for ( int i = 0 ; i < 8 ; i++ )
@@ -309,7 +309,7 @@ void Octree::getLineDistance(const Vector3d &point, const Vector3d &dir, double 
 
 			distance = diff.transpose() * diff;
 
-			if ( distance < th2 )
+			if ( inner >= 0 && distance < th2 )
 				child[i]->getLineDistance(point, dir, threshold);
 		}
 	}
@@ -440,6 +440,7 @@ int OctreeEntryList::addEntry(OctreeEntry *pEntry)
 	OctreeEntryList *ret = &(list[list_index]);
 //	ret->pNext	= NULL;
 	ret->pEntry	= pEntry;
+//	cerr << pEntry << endl;
 
 //	if ( list_index > 0 )
 //		OctreeEntryList::list[list_index-1].pNext = ret;

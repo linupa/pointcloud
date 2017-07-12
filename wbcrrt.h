@@ -33,7 +33,9 @@ public:
 	MatrixXd	traction;
 	VectorXd	actual;
 	Vector3d 	coms[LINKS];
+#ifdef USE_WBC
 	State 		state;
+#endif
 
 	virtual	WbcNode &operator=(const WbcNode &src);
 	virtual	WbcNode &operator=(const Node<DOF> &src);

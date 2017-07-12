@@ -44,6 +44,7 @@ double project1( Node<T> &np );
 VectorXd getQ(const VectorXd &uq);
 VectorXd getQa(const VectorXd &q);
 
+extern Timestamp ts_intervention;
 void *plan(void *)
 {
 	fprintf(stderr, "Planning Thread Started...\n");
@@ -78,7 +79,9 @@ void *plan(void *)
 		newNode->parent = NULL;
 		rrt->nodes[rrt->numNodes++] = newNode;
 #else
-		rrt->reset(getQa(disp_q1));
+		q0 = disp_q1;
+		rrt->reset(getQa(q0));
+		cerr << q0.transpose() << endl;
 		
 #ifdef USE_WBC
 		((WbcNode *)rrt->nodes[0])->getProjection();
@@ -89,8 +92,7 @@ void *plan(void *)
 		int count = 0;
 
 		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(disp_q1);
-		q0 = disp_q1;
+		myModel.updateState(q0);
 		elbow0 = myModel.joints[5].getGlobalPos(VectorXd::Zero(3));
 		pthread_mutex_unlock(&link_mutex);
 
@@ -114,7 +116,7 @@ void *plan(void *)
 					cerr << p->q.transpose() << endl;
 					cerr << "Actual " << p->actual.transpose() << endl;
 					cerr << *rrt << endl;
-					disp_q2 = getQ(p->q);
+//					disp_q2 = getQ(p->q);
 					next_count += 1000;
 				}
 				count++;
@@ -133,6 +135,7 @@ void *plan(void *)
 				Timestamp ts1("Path Planning Time");
 				ts1.setMode(Timestamp::MODE_SHOW_MSEC | Timestamp::MODE_OVERLAP);
 				ts1.setBaseline();
+				ts_intervention.checkElapsed(1);
 
 				pthread_mutex_lock(&mutex);
 				qp1.clear();
@@ -154,12 +157,14 @@ void *plan(void *)
 				fprintf(stderr, "NODE %d->%d/%d\n", from, to, rrt->numNodes);
 				WbcPath path(rrt->nodes[from], rrt->nodes[to]);
 				ts1.checkElapsed(0);
+				ts_intervention.checkElapsed(2);
 				path.step = 0.01*M_PI;
 				path.optimize(100);
 	//			path.optimize(NULL, 10);
+				ts_intervention.checkElapsed(3);
 
 				ts1.checkElapsed(1);
-				Node<DOF> *p = rrt->nodes[rrt->numNodes-1];
+//				Node<DOF> *p = rrt->nodes[rrt->numNodes-1];
 				cerr << "Optimal path " << path.numNewNode << " nodes" << endl;
 				for ( int i = 0 ; i < path.numNewNode ; i++ )
 				{
@@ -196,6 +201,7 @@ void *plan(void *)
 						distp.push_back(dd);
 					pthread_mutex_unlock(&link_mutex);
 				}
+				cerr << "Done" << endl;
 				int i;
 
 //				for ( i = 0 ; i < dist.size() ; i++ )
@@ -204,6 +210,7 @@ void *plan(void *)
 //				for ( i = 0 ; i < distp.size() ; i++ )
 //					cerr << distp[i] << endl;
 				ts1.checkElapsed(2);
+				ts_intervention.checkElapsed(4);
 
 				double d_max = dist.back();
 				d_t.clear();
@@ -315,9 +322,12 @@ void *plan(void *)
 				}
 				pthread_mutex_unlock(&mutex);
 				clearRobotState(STATE_OPERATE);
+				setRobotState(STATE_OPERATING);
 				ts1.checkElapsed(3);
+				ts_intervention.checkElapsed(5);
 
 				cerr << ts1;
+				cerr << ts_intervention;
 			}
 			usleep(10);
 		}
