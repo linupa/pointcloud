@@ -44,7 +44,7 @@ Joint::Joint(void)
 
 Joint::Joint(const Joint &src)
 {
-	strcpy(name, src.name);
+	strncpy(name, src.name, JOINT_NAME_LEN-1);
 	name[0] = 'a';
 	name[1] = '\0';
 	com		= src.com;
@@ -340,7 +340,7 @@ void Joint::setRot(VectorXd axis0, double rad)
 
 Joint &Joint::operator=(const Joint &src)
 {
-	strcpy(name, src.name);
+	strncpy(name, src.name, JOINT_NAME_LEN-1);
 	com		= src.com;
 	trans	= src.trans;
 	rot		= src.rot;
