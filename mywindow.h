@@ -13,6 +13,12 @@
 
 #include <FL/fl_draw.H>
 
+extern int win_width;
+extern int win_height;
+extern double hor;
+extern double ver;
+extern double scale;
+
 using namespace std;
 
 typedef struct {

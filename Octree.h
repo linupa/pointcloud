@@ -15,7 +15,7 @@ public:
 	double y;
 	double z;
 	Octree *tree;
-	virtual void absorb(OctreeEntry *other) = 0;
+	virtual void absorb(OctreeEntry *other) {}
 };
 
 class OctreeEntryList

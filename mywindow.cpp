@@ -1,20 +1,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <iostream>
-
-#include "config.h"
-
-
-#ifdef USE_WBC
-#include <jspace/Model.hpp>
-#include <jspace/State.hpp>
-#include <jspace/test/sai_util.hpp>
-#include <jspace/pseudo_inverse.hpp>
-
-#include <boost/scoped_ptr.hpp>
-#endif
-
-#include "kin.h"
+#include <Eigen/Dense>
 
 #include <FL/Fl.H>
 #include <FL/Fl_Double_Window.H>
@@ -22,18 +9,11 @@
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Value_Slider.H>
 
-#include "mywindow.h"
-//#include "xml.h"
-#include "kin.h"
-#include "prm.hpp"
-#include "model.h"
 #include "Octree.h"
-#include "rvolume.h"
+#include "mywindow.h"
 
 using Eigen::MatrixXd;
 
-#include "wbcrrt.h"
-#include "wbc.h"
 #define CLICK_THRESHOLD 3
 
 // States
@@ -60,17 +40,13 @@ int seq_ui = 0;
 int node_id = 0;
 int sample_ui = 0;
 
-extern Vector3d	gIntervenePos;
-extern Vector3d	gInterveneVel;
+extern Octree *octree;
+extern double dt;
 
-void periodicTask(void);
-double *value;
-double getPotential(int mode, const Vector3d &contact, const WbcNode &node, const vector<Vector3d> &r0, const int verbose=0);
-VectorXd getQ(const VectorXd &uq);
-VectorXd getQa(const VectorXd &q);
-void push(VectorXd dir);
-void intervention(void);
-VectorXd interpolate(const vector<VectorXd> &list, double seq);
+extern double color_offset;
+extern double color_scale;
+extern double grid_height;
+extern int color_axis;
 
 //MySim::MySim(int xx, int yy, int width, int height) : Fl_Widget(xx, yy, width, height, "")
 MySim::MySim(int xx, int yy, int width, int height) : Fl_Gl_Window(xx, yy, width, height, "")
@@ -378,6 +354,37 @@ void drawSphere(const Vector3d  &pos, double radius, int numPoly)
 	drawSphere(_pos, radius, numPoly);
 }
 
+void getColor(float value, float *color)
+{
+	float ref[6][3] = { 
+		{1.,0., 0.},
+		{1.,1., 0.},
+		{0.,1., 0.},
+		{0.,1., 1.},
+		{0.,0., 1.},
+		{1.,0., 1.},
+	};
+
+	if ( value <= 0 )
+	{
+		memcpy(color, ref[0], sizeof(float)*3);
+		return;
+	}
+	if ( value >= 1. )
+	{
+		memcpy(color, ref[5], sizeof(float)*3);
+		return;
+	}
+
+	int idx = (int)(value * 5.);
+	float frac = (float)value * 5. - (float)idx;
+
+	for ( int i = 0 ; i < 3 ; i++ )
+		color[i] = ref[idx][i]*(1.-frac) + ref[idx+1][i]*frac;
+
+	return;
+}
+
 void drawOccupancy(Octree *tree)
 {
 	OctreeEntry *entry = tree->entry;
@@ -385,6 +392,22 @@ void drawOccupancy(Octree *tree)
 	if ( entry == NULL )
 		return;
 
+	float color[3];
+	float value;
+	switch (color_axis)
+	{
+	case 0:
+		value = tree->x;
+		break;
+	case 1:
+		value = tree->y;
+		break;
+	default:
+		value = tree->z;
+		break;
+	}
+	getColor((value+color_offset)*color_scale, color);
+	glColor3f(color[0], color[1], color[2]);
 	glPushMatrix();
 	glTranslatef(tree->x, tree->y, tree->z);
 	drawBlock(tree->len*2, tree->len*2);
@@ -406,7 +429,6 @@ void drawOccupancy(Octree *tree)
 	double curv;
 	GLfloat red[] = {1., 0., 0., 1.};
 	GLfloat white[] = {1., 1., 1., 1.};
-
 
 #if 0
     if (w() > h()) {
@@ -483,345 +505,21 @@ void drawOccupancy(Octree *tree)
 		{1.,0., 1.},
 	};
 
-	int index = 0;
-//	XmlNode *pNode = &baseNode;
-//	XmlNode *pNode = baseNode.childs;
-
-	double mat[16] = {0.};
-
-	// Draw Skeleton of the Current State
-//	if ( goalIdx <= 0 )
-	{
-		glColor3f(1.0, 1.0, 1.0);
-		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(disp_q1);
-		for ( i = 0 ; i < myModel.numLinks ; i++ )
-		{
-			Link	link = myModel.localLinks[i];
-
-			Vector3d r0	= myModel.joints[link.index].getGlobalPos(link.from);
-			Vector3d r	= myModel.joints[link.index].getGlobalPos(link.to);
-
-			drawCapsule(r0, r, link.radius);
-		}
-		glColor3f(1.0, 0.0, 0.0);
-		drawSphere(myModel.joints[3].getGlobalPos(Vector3d::Zero()), 0.03, 20);
-		drawSphere(myModel.joints[5].getGlobalPos(Vector3d::Zero()), 0.03, 20);
-		pthread_mutex_unlock(&link_mutex);
-
-	}
-
-	glColor3f(1.0, 0.0, 0.0);
-	VectorXd unit = VectorXd::Zero(3);
-	unit(0) = 1.;
-
-//	pthread_mutex_lock(&mutex);
-//	vector<VectorXd> *qp;
-
-
-//	if ( seq_ui > 0 )
-//	{
-//		seq = seq_ui-1;
-//	}
-//
-//	VectorXd Q = disp_q1;
-//	if ( qp->size() > 2 )
-//	{
-//		Q = interpolate(*qp, seq);
-//	}
-//	if ( prm->numNodes > 0 && node_id > 0 )
-//		Q = getQ(prm->nodes[node_id-1]->q);
-//
-//	pthread_mutex_unlock(&mutex);
-
-//	for ( ; it != qp->end() ; it++ )
-//	if ( qp->size() > 0 )
-	{
-//		cerr << seq << " / " << qp->size() << endl;
-#if 0
-#endif
-
-		// Draw Skeleton of Plan
-		VectorXd disp_q2;
-		if ( sample_ui > 0 && sample_ui <= rrt->numNodes )
-			disp_q2 = getQ(rrt->nodes[sample_ui - 1]->q);
-		else if ( seq_ui > 0 )
-		{
-			Vector3d contact = elbow0;
-
-			pthread_mutex_lock(&mutex);
-			vector<VectorXd> *qp;
-			if ( bPath )
-				qp = &qp1;
-			else
-				qp = &qp2;
-			disp_q2 = (*qp)[seq_ui-1]; 
-			pthread_mutex_unlock(&mutex);
-		}
-		else
-			disp_q2 = VectorXd::Zero(LINKS);
-
-
-		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(disp_q2);
-		myModel.checkCollision();
-
-		
-		for ( i = 0 ; i < myModel.numLinks ; i++ )
-		{
-			if ( myModel.collision[i] >= 0 )
-			{
-				glLineWidth(3.0);
-				glColor3f(1.,0.,0.);
-			}
-			else
-			{
-				glColor3f(1.,1.,1.);
-				glLineWidth(1.0);
-			}
-
-			if ( i == link_ui )
-			{
-				glLineWidth(6.0);
-			}
-			else if ( i == link2_ui )
-			{
-				glLineWidth(6.0);
-			}
-//			Link link = myLocalLink[i];
-			Link link = myModel.localLinks[i];
-			Vector3d r0	= myModel.joints[link.index].getGlobalPos(link.from);
-			Vector3d r	= myModel.joints[link.index].getGlobalPos(link.to);
-//			if ( goalIdx <= 0 )
-			{
-				glBegin(GL_LINES);
-				glVertex3f(r(0), r(1), r(2));
-				glVertex3f(r0(0), r0(1), r0(2));
-				glEnd();
-			}
-#if 0
-			else
-			{
-				drawCapsule(r0, r, link.radius);
-			}
-#endif
-		}
-
-		if ( num_alpha > 0 )
-		{
-			for ( i = 0 ; i < num_alpha ; i++ )
-			{
-				double a, b;
-				Vector3d x[4], p, q;
-				Link l1, l2;
-
-				a = alpha[i];
-				b = beta[i];
-				l1 = myModel.localLinks[link_a[i]];
-				l2 = myModel.localLinks[link_b[i]];
-				x[0] = myModel.joints[l1.index].getGlobalPos(l1.from);
-				x[1] = myModel.joints[l1.index].getGlobalPos(l1.to);
-				x[2] = myModel.joints[l2.index].getGlobalPos(l2.from);
-				x[3] = myModel.joints[l2.index].getGlobalPos(l2.to);
-
-				p = x[0] + a * (x[1] - x[0]);
-				q = x[2] + b * (x[3] - x[2]);
-				
-				glColor3f(0.0, 1.0, 0.0);
-				glLineWidth(1.0);
-				glBegin(GL_LINES);
-				glVertex3f(p(0), p(1), p(2));
-				glVertex3f(q(0), q(1), q(2));
-				glEnd();
-			}
-		}
-		pthread_mutex_unlock(&link_mutex);
-
-
-		// Draw Sphere on CoM of Each Limb
 #if 1
-		glLineWidth(1.0);
-		Vector3d r, r1;
-		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(disp_q2);
-		for ( i = 0 ; i < DOF+1 ; i++ )
-		{
-			r = myModel.joints[i].getGlobalPos(myModel.joints[i].com);
-			glColor3f(1.0, 1.0, 1.0);
-#if 0
-			glPushMatrix();
-			glTranslatef(r(0), r(1), r(2));
-			glutSolidSphere(0.020,20,20);
-			glPopMatrix();
-#else
-			drawSphere(r, 0.02, 20);
-#endif
-		}
-
-
-		r = myModel.joints[5].getGlobalPos(Vector3d::Zero());
-		Vector3d hand = Vector3d::Zero();
-		hand(1) = -0.05;
-		r1 = myModel.joints[9].getGlobalPos(hand);
-		pthread_mutex_unlock(&link_mutex);
-
-		// Elbow
-		glColor3f(0.0, 0.0, 0.1);
-		drawSphere(r, 0.04, 20);
-
-		// End Effector
-		glColor3f(0.0, 0.0, 1.0);
-		drawSphere(r1, 0.04, 20);
-	}
-
-#if 0
-	glPushMatrix();
-	glColor3f(1.,0.,0.);
-	glTranslatef(0.3, -0.1, 0.2);
-	glutSolidSphere(0.025,20,20);
-	glPopMatrix();
-#endif
-	
-	//////////////////////////////////
-	// Debugging purpose
-	//////////////////////////////////
-	// Show the elbow position error
-	glColor3f(0.0, 1.0, 0.0);
-	drawSphere(elbow0, 0.020,20);
-
-	glColor3f(0.0, 0.0, 1.0);
-	drawSphere(elbow, 0.040,20);
-
-	glColor3f(1.0, 1.0, 1.0);
-	glLineWidth(3.0);
-	glBegin(GL_LINES);
-	glVertex3f(elbow0(0), elbow0(1), elbow0(2));
-	glVertex3f(elbow(0), elbow(1), elbow(2));
-	glEnd();
-
-	// Show end effector position
-	glColor3f(0.,1.,0.);
-	drawSphere(endeffector, 0.025, 20);
-
-	// Show desired end effector position
-	glPushMatrix();
-	glColor3f(1.,0.,0.);
-//	glTranslatef(.4, -.2, .2);
-	glTranslatef(desired_pos(0), desired_pos(1), desired_pos(2));
-	glutSolidSphere(0.025,20,20);
-	glPopMatrix();
-
-//	fprintf(stderr, "%f %f %f %f %f %f\n", torque[0], torque[1], torque[2], force[0], force[1], force[2]); 
-	// Draw Human Posture
-
-#if 0
-	for ( i = 0 ; i < 3 ; i++ )
-	{
-		double mag = force[i];
-		double vec[3][3] = { 	{ 1., 0., 0. },
-								{ -.5, sqrt(3.)/2., 0.},
-								{ -.5, -sqrt(3.)/2., 0.}};
-
-		glPushMatrix();
-		glBegin(GL_LINES);
-		glVertex3f(0., 0., 0.);
-		glVertex3f(vec[i][0]*mag, vec[i][1]*mag, vec[i][2]*mag);
-		glEnd();
-		glPopMatrix();
-	}
-#endif
-	
-
-	double transparency;
-	double currentTime = Timestamp::getCurrentTime();
-
-	if ( currentTime - gObjTime < 0.5 )
-		transparency = 1.;
-	else
-		transparency = 1. / (currentTime - gObjTime);
-
-	// Intevention location
-	glColor4f(0.0, 1.0, 0.0, transparency);
-	drawSphere(gObj, 0.05, 100);
-
-	glColor4f(1.0, 0.0, 0.0, transparency);
-	glBegin(GL_LINES);
-	glVertex3f(gObj[0], gObj[1], gObj[2]);
-	glVertex3f(gObj[0]+gObjVel[0]*5, gObj[1]+gObjVel[1]*5, gObj[2]+gObjVel[2]*5);
-	glEnd();
-	glColor4f(1.0, 1.0, 0.0, transparency);
-	glBegin(GL_LINES);
-	glVertex3f(gObj[0]+gObjVel[0]*5, gObj[1]+gObjVel[1]*5, gObj[2]+gObjVel[2]*5);
-	glVertex3f(gObj[0]+gObjVel[0]*10, gObj[1]+gObjVel[1]*10, gObj[2]+gObjVel[2]*10);
-	glEnd();
-
-	// Intevention location
-	if ( gIntervenePos.norm() > 0. )
-	{
-		glColor3f(1.0, 0.0, 0.0);
-		drawSphere(gIntervenePos, 0.05, 100);
-
-		glColor3f(1.0, 0.0, 0.0);
-		glBegin(GL_LINES);
-		glVertex3f(gIntervenePos[0], gIntervenePos[1], gIntervenePos[2]);
-		glVertex3f(gIntervenePos[0]+gInterveneVel[0], gIntervenePos[1]+gInterveneVel[1], gIntervenePos[2]+gInterveneVel[2]);
-		glEnd();
-	}
-
-	if ( gGoalTime < 5. )
-	{
-		glColor3f(1.0, 0.0, 0.0);
-		drawSphere(gGoal, 0.05, 100);
-	}
-	else if ( gGoalTime < 10. )
-	{
-		glColor3f(0.0, 1.0, 0.0);
-		drawSphere(gGoal, 0.05, 100);
-	}
-
-	unsigned int octree_mask = 0;
 	glLineWidth(1.0);
-	if ( octree_id == 20 )
-		octree_mask = 0xffffffff;
-	else
-		octree_mask = 1<<octree_id;
-	Vector3d dir = gInterveneVel / gInterveneVel.norm();
-//	Vector3d dir = gObjVel / gObjVel.norm();
-	for ( int i = 0 ; i < 16 ; i++ )
-	{
-		glColor3f(color[i][0], color[i][1], color[i][2]);
-		if ( octree_mask & (1<<i) )
-		{
-			glLineWidth(1.0);
-			RVolume::callback(i, drawOccupancy);
-			double goal[3];
-			OctreeEntryList::reset();
-			goal[0] = gGoal[0];
-			goal[1] = gGoal[1];
-			goal[2] = gGoal[2];
-			RVolume::getOctree(i)->getLineDistance(gIntervenePos, dir, 0.1);
-//			if ( OctreeEntryList::count > 0 )
-//				cerr << "Neighbor " << OctreeEntryList::count << endl;
+	glColor3f(color[0][0], color[0][1], color[0][2]);
 
-			glLineWidth(3.0);
-			glColor3f(1., 1., 1.);
-			for ( int j = 0 ; j < OctreeEntryList::count ; j++ )
-			{
-				drawOccupancy(OctreeEntryList::list[j].pEntry->tree);
-//				cerr<< OctreeEntryList::list[j].pEntry->tree->x << ":"
-//					<< OctreeEntryList::list[j].pEntry->tree->y << ":"
-//					<< OctreeEntryList::list[j].pEntry->tree->z << " "
-//					<< OctreeEntryList::list[j].pEntry->z << " " <<
-//					<< endl;
-			}
-		}
+	{
+		glLineWidth(1.0);
+		octree->callBack(drawOccupancy);
 	}
+#endif
 
 	// Floor 
 	glLineWidth(1.0);
 	glPushMatrix();
 	glRotatef(phi*180./M_PI, 0., 0., 1.);
-	double h = -0.5;
+	double h = grid_height;
 	for ( i = -10 ; i <= 10 ; i++ )
 	{
 		glLineWidth(1.0);
@@ -842,8 +540,6 @@ void drawOccupancy(Octree *tree)
 		glPopMatrix();
 	}
 	glPopMatrix();
-#else // Unused parts
-#endif
 
     glCullFace(GL_BACK);
   }
@@ -871,11 +567,11 @@ MyWindow(int width, int height, const char * title)
     learnBaseButton->callback(cb_simul, this); 
     sendButton = new Fl_Button(5, height - 35, 100, 30, "&Send"); 
     sendButton->callback(cb_send, this); 
-    pushXButton = new Fl_Button(5, height - 35, 100, 30, "&PushX"); 
+    pushXButton = new Fl_Button(5, height - 35, 100, 30, "&X"); 
     pushXButton->callback(cb_pushx, this); 
-    pushYButton = new Fl_Button(5, height - 35, 100, 30, "&PushY"); 
+    pushYButton = new Fl_Button(5, height - 35, 100, 30, "&Y"); 
     pushYButton->callback(cb_pushy, this); 
-    pushZButton = new Fl_Button(5, height - 35, 100, 30, "&PushZ"); 
+    pushZButton = new Fl_Button(5, height - 35, 100, 30, "&Z"); 
     pushZButton->callback(cb_pushz, this); 
     goalButton = new Fl_Button(5, height - 35, 100, 30, "&Goal"); 
     goalButton->callback(cb_goal, this); 
@@ -888,10 +584,10 @@ MyWindow(int width, int height, const char * title)
 
 	mGroupSlider = new Fl_Value_Slider( 10, height - 30, width / 4 - 100, 30, "");
 	mGroupSlider->type(FL_HORIZONTAL);
-	mGroupSlider->bounds(0., (double)20.);
+	mGroupSlider->bounds(-1., (double)1.);
 	mGroupSlider->callback(cb_group, this);
-	mGroupSlider->step(1.);
-	mGroupSlider->value(0);
+	mGroupSlider->step(0.01);
+	mGroupSlider->value(color_offset);
 
 	mSizeSlider = new Fl_Value_Slider( 10, height - 30, width / 4 - 100, 30, "");
 	mSizeSlider->type(FL_HORIZONTAL);
@@ -902,10 +598,10 @@ MyWindow(int width, int height, const char * title)
 
 	mSliceSlider = new Fl_Value_Slider( 10, height - 30, width / 4 - 100, 30, "");
 	mSliceSlider->type(FL_HORIZONTAL);
-	mSliceSlider->bounds(0., 16.);
+	mSliceSlider->bounds(-1., 1.);
 	mSliceSlider->callback(cb_control, this);
-	mSliceSlider->step(1.);
-	mSliceSlider->value(1.);
+	mSliceSlider->step(.01);
+	mSliceSlider->value(grid_height);
 
 	mScaleSlider = new Fl_Value_Slider( width / 4 + 20, height - 30, width / 4 - 100, 30, "");
 	mScaleSlider->type(FL_HORIZONTAL);
@@ -923,10 +619,10 @@ MyWindow(int width, int height, const char * title)
 
 	mSeqSlider = new Fl_Value_Slider( width / 4 + 20, height - 30, width / 4 - 100, 30, "");
 	mSeqSlider->type(FL_HORIZONTAL);
-	mSeqSlider->bounds(0., 0.);
-	mSeqSlider->step(1.);
+	mSeqSlider->bounds(0.1, 10.);
+	mSeqSlider->step(0.1);
 	mSeqSlider->callback(cb_seq, this);
-	mSeqSlider->value(0);
+	mSeqSlider->value(color_scale);
 
 	mHighlightSlider = new Fl_Value_Slider( 10, height - 35, width / 4 - 100, 30, "");
 	mHighlightSlider->type(FL_VERTICAL);
@@ -981,72 +677,16 @@ extern VectorXd Maxs;
 void MyWindow::
 timer_cb(void * param)
 {
-	static double lastZ = 10.0;
-
-	double x, z;
-//	x = myModel.getX();
-//	z = myModel.getZ();
-
-//	if ( z <= 0.0 && lastZ <= 0.0 )
-//		paused = true;
-	
-//	if ( !paused )
-
-	if ( !(getRobotState() & STATE_SIMUL) )
-	{
-		disp_q1[control] += speed;
-		int joint = control;
-
-		if ( joint > 1)
-			joint--;
-
-		if ( disp_q1[control] > Maxs[joint] )
-			disp_q1[control] = Maxs[joint];
-		else if ( disp_q1[control] < Mins[joint] )
-			disp_q1[control] = Mins[joint];
-
-		disp_q1[2] = disp_q1[1];
-	}
-
-	periodicTask();
-
 	const double scr_dt = 0.03;
 	static double acc = 0.;
 
 	if ( acc >= scr_dt )
 	{
-//		myModel.update();
-
-		lastZ = z; 
-
-//		traceX.push_back(x);
-//		traceZ.push_back(z);
 
 		reinterpret_cast<MyWindow*>(param)->sim->redraw();
 		acc = 0.;
 	}
 	acc += dt;
-/*
-	if ( ! paused || ! paused_ready ) {
-		reinterpret_cast<Simulator*>(param)->tickCount();
-	}
-
-	if ( paused )
-		paused_ready = true;
-	if ( ! paused )
-		paused_ready = false;
-*/
-
-	int path_size;
-	if ( bPath )
-		path_size = qp1.size();
-	else
-		path_size = qp2.size();
-
-	reinterpret_cast<MyWindow*>(param)->mSeqSlider->bounds(0., (double)(path_size));
-	reinterpret_cast<MyWindow*>(param)->pathButton->label(bPath?"Opt":"Org");
-//	reinterpret_cast<MyWindow*>(param)->mNodeSlider->bounds(0., (double)(prm->numNodes));
-	reinterpret_cast<MyWindow*>(param)->mHighlightSlider->bounds(0., (double)rrt->numNodes);
 
 	Fl::repeat_timeout(dt, // gets initialized within tickCount()
 			   timer_cb,
@@ -1057,10 +697,6 @@ timer_cb(void * param)
 void MyWindow::
 cb_simul(Fl_Widget *widget, void *param)
 {
-	if ( getRobotState() & STATE_SIMUL )
-		clearRobotState(STATE_SIMUL);
-	else
-		setRobotState(STATE_SIMUL);
 }
 
 void MyWindow::
@@ -1073,7 +709,7 @@ void MyWindow::
 cb_control(Fl_Widget *widget, void *param)
 {
 	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
-	control = pSlider->value();
+	grid_height = pSlider->value();
 }
 
 void MyWindow::
@@ -1087,7 +723,7 @@ void MyWindow::
 cb_group(Fl_Widget *widget, void *param)
 {
 	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
-	octree_id = (int)pSlider->value();
+	color_offset = pSlider->value();
 }
 
 void MyWindow::
@@ -1101,21 +737,11 @@ cb_highlight(Fl_Widget *widget, void *param)
 void MyWindow::
 cb_reset(Fl_Widget *widget, void *param)
 {
-	clearRobotState(STATE_SIMUL);
-
-	disp_q1 = VectorXd::Zero(disp_q1.rows());
-	qp1.clear();
-	qp2.clear();
-
 }
 
 void MyWindow::
 cb_plan(Fl_Widget *widget, void *param)
 {
-	if ( getRobotState() & STATE_LEARN )
-		clearRobotState(STATE_LEARN);
-	else
-		setRobotState(STATE_LEARN);
 }
 
 void MyWindow::
@@ -1128,17 +754,11 @@ cb_path(Fl_Widget *widget, void *param)
 void MyWindow::
 cb_random(Fl_Widget *widget, void *param)
 {
-	setRobotState(STATE_OPERATE);
-	goalIdx = -1;
 }
 
 void MyWindow::
 cb_send(Fl_Widget *widget, void *param)
 {
-	if ( getRobotState() & STATE_SEND )
-		clearRobotState(STATE_SEND);
-	else
-		setRobotState(STATE_SEND);
 //	tickCount = 0;
 }
 
@@ -1147,88 +767,35 @@ int push_type = 0;
 void MyWindow::
 cb_pushx(Fl_Widget *widget, void *param)
 {
-	VectorXd dir = VectorXd::Zero(3);
-	dir(0) = 1;
-	push(dir);
+	color_axis = 0;
 }
 void MyWindow::
 cb_pushy(Fl_Widget *widget, void *param)
 {
-	VectorXd dir = VectorXd::Zero(3);
-	dir(1) = -1;
-	push(dir);
+	color_axis = 1;
 }
 void MyWindow::
 cb_pushz(Fl_Widget *widget, void *param)
 {
-	VectorXd dir = VectorXd::Zero(3);
-	dir(2) = 1;
-	push(dir);
+	color_axis = 2;
 }
 
 void MyWindow::
 cb_seq(Fl_Widget *widget, void *param)
 {
 	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
-	seq_ui = (int)pSlider->value();
-	int seq_no = seq_ui - 1;
-
-	if ( seq_no >= 0 )
-	{
-		Vector3d contact = elbow0;
-
-		pthread_mutex_lock(&mutex);
-		vector<VectorXd> *qp;
-		if ( bPath )
-			qp = &qp1;
-		else
-			qp = &qp2;
-		VectorXd Q = (*qp)[seq_no]; 
-		pthread_mutex_unlock(&mutex);
-
-#if 1
-		WbcNode node;
-
-		node.setState(getQa(Q));
-#ifdef USE_WBC
-		node.getProjection();
-#endif
-		pthread_mutex_lock(&link_mutex);
-		myModel.updateState(Q);
-
-		vector<Vector3d> r0;
-		for ( int j = 0 ; j < 10 ; j++ )
-		{
-			r0.push_back(myModel.joints[j].getGlobalPos(myModel.joints[j].com));
-		}
-		pthread_mutex_unlock(&link_mutex);
-
-		double val = getPotential(0, contact, node, r0, 1);
-
-		cerr << seq_no << ": " << val << ":" << Q.transpose() * 180. / M_PI << endl;
-#endif
-	}
+	
+	color_scale = pSlider->value();
 }
 
 void MyWindow::
 cb_link2(Fl_Widget *widget, void *param)
 {
-	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
-	link2_ui = (int)pSlider->value();
 }
 
 void MyWindow::
 cb_node(Fl_Widget *widget, void *param)
 {
-#if 0
-	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
-	node_id = (int)pSlider->value();
-	if ( node_id > 0 )
-		cerr <<  prm->nodes[node_id-1]->q.transpose()*180./M_PI << endl;
-#else
-	Fl_Value_Slider *pSlider = (Fl_Value_Slider *)widget;
-	link_ui = (int)pSlider->value();
-#endif
 }
 
 double goals[][3] =
@@ -1244,33 +811,11 @@ double goals[][3] =
 void MyWindow::
 cb_goal(Fl_Widget *widget, void *param)
 {
-	int i;
-	Vector3d goal(3);
-#if 0 // Random goal position
-	double bound[3][2] = {
-	{-0.3,0.3}, {-0.3,0.3}, {0,.5}
-	};
-
-	for ( i = 0 ; i < 3 ; i++ )
-	{
-		goal(i) = bound[i][0] + (double)rand() * (bound[i][1] - bound[i][0]) / RAND_MAX;
-	}
-#else // Predefined goal position
-	static int idx = 0;
-
-	goal(0) = goals[idx][0];
-	goal(1) = goals[idx][1];
-	goal(2) = goals[idx][2];
-	idx = (idx+1) % 5;
-#endif
-
-	gGoal = goal;
 }
 
 void MyWindow::
 cb_intervene(Fl_Widget *widget, void *param)
 {
- 	intervention();
 }
 
 MyWindow::~MyWindow(void)
