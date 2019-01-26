@@ -2,11 +2,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <iostream>
-#include "tinyxml.h"
 #include <sys/time.h>
 #include <Eigen/Dense>
-
-#include "xml.h"
 
 #include <GL/gl.h>
 #include <GL/glu.h>
@@ -21,10 +18,9 @@
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Value_Slider.H>
 
-#include "fileio.h"
-
 #include "Octree.h"
 #include "mywindow.h"
+#include "fileio.h"
 #include "timestamp.h"
 #include "default.h"
 
@@ -78,6 +74,9 @@ int main(int argc, char *argv[])
 			case 'p':
 				strncpy(pcd_filename, optarg,FILE_NAME_SIZE);
 				break;
+			case 'h':
+				printf("Usage: %s -p <PCD file name>", argv[0]);
+				exit(-1);
 			default:
 				break;
 
